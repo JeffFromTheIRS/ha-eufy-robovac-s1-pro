@@ -283,14 +283,16 @@ class RunningStatusSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity,
             
             return status_description
         
-        # Fallback to DPS 2 if DPS 153 is not available
-        dps2 = self.coordinator.data.get("2")
-        if dps2 is True:
-            return "Running"
-        elif dps2 is False:
-            return "Stopped"
-        
-        return "Unknown"
+        # Fallback: infer from battery level when DPS 153 is absent (e.g. docked/idle)
+        battery = self.coordinator.data.get("8") or self.coordinator.data.get("163")
+        if battery is not None:
+            try:
+                b = int(battery)
+                return "Fully Charged" if b >= 100 else "Charging"
+            except (ValueError, TypeError):
+                pass
+
+        return "Idle"
     
     @property
     def icon(self) -> str:

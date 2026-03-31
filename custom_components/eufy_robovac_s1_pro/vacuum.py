@@ -279,13 +279,7 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
         dps153 = self.coordinator.data.get("153", "")  # Actual status indicator (most reliable)
         
         logger.debug(f"Activity check - DPS 6: {dps6}, DPS 153: {dps153}")
-        
-        # Error detection
-        if isinstance(dps6, int) and dps6 >= 100:
-            self._detected_state = RobovacState.ERROR
-            self._substatus = "error"
-            return VacuumActivity.ERROR
-        
+
         # Check DPS 153 status using improved pattern-based detection
         if dps153:
             detected_state, substatus = decode_dps153_to_state(dps153)
@@ -350,7 +344,13 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
             else:
                 return VacuumActivity.IDLE
         
-        # デフォルト
+        # No known pattern matched — infer from battery level
+        battery = self.coordinator.data.get("8") or self.coordinator.data.get("163", 0)
+        try:
+            if int(battery) >= 95:
+                return VacuumActivity.DOCKED
+        except (ValueError, TypeError):
+            pass
         return VacuumActivity.IDLE
 
     @property
