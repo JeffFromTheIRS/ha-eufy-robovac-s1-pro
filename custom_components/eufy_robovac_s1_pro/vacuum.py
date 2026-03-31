@@ -586,9 +586,11 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
         # Do nothing, but don't raise an error for compatibility
 
     async def async_locate(self, **kwargs: Any) -> None:
-        """Locate the vacuum (make it beep) - Not supported on S1 Pro."""
-        logger.info("Locate function is not supported on S1 Pro - ignoring request")
-        # Do nothing, but don't raise an error for compatibility
+        """Locate the vacuum by triggering DPS 103."""
+        try:
+            await self.coordinator.tuya_client.async_set({"103": True})
+        except Exception as e:
+            logger.error(f"Failed to locate vacuum: {e}")
 
     async def async_set_fan_speed(self, fan_speed: str, **kwargs: Any) -> None:
         """Set the vacuum's fan speed."""

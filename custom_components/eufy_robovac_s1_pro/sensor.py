@@ -148,6 +148,31 @@ async def async_setup_entry(
         # TODO: Uncomment when time data position is identified
         # devices.append(TotalCleaningTimeSensor(coordinator=coordinator))
 
+        # Consumable life sensors (conditional on DPS presence)
+        consumables = [
+            ("112", "Side Brush Life", "mdi:broom"),
+            ("113", "Main Brush Life", "mdi:broom"),
+            ("114", "Filter Life", "mdi:air-filter"),
+            ("127", "Sensor Life", "mdi:leak"),
+        ]
+        for dps_id, name, icon in consumables:
+            if coordinator.data and dps_id in coordinator.data:
+                devices.append(ConsumableLifeSensor(coordinator=coordinator, dps_id=dps_id, name=name, icon=icon))
+
+        # Last clean time/area sensors (conditional on DPS presence)
+        if coordinator.data and "109" in coordinator.data:
+            devices.append(LastCleanTimeSensor(coordinator=coordinator))
+        if coordinator.data and "110" in coordinator.data:
+            devices.append(LastCleanAreaSensor(coordinator=coordinator))
+
+        # Total clean time sensor (conditional on DPS presence)
+        if coordinator.data and "119" in coordinator.data:
+            devices.append(TotalCleanTimeSensor(coordinator=coordinator))
+
+        # Error code sensor (conditional on DPS presence)
+        if coordinator.data and "106" in coordinator.data:
+            devices.append(ErrorCodeSensor(coordinator=coordinator))
+
     if devices:
         return async_add_devices(devices)
 
@@ -485,3 +510,127 @@ class TotalCleaningAreaSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEnt
 #         
 #         stats = parse_dps167_statistics(dps167)
 #         return stats.get("total_time_mins")
+
+
+class ConsumableLifeSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
+    """Sensor for consumable remaining life (side brush, main brush, filter, sensor)."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator, dps_id: str, name: str, icon: str):
+        self._dps_id = dps_id
+        self._attr_name = name
+        self._attr_icon = icon
+        super().__init__(coordinator=coordinator)
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.data is not None and self._dps_id in self.coordinator.data
+
+    @property
+    def native_value(self) -> int | None:
+        if self.coordinator.data:
+            value = self.coordinator.data.get(self._dps_id)
+            if value is not None:
+                try:
+                    return int(value)
+                except (ValueError, TypeError):
+                    pass
+        return None
+
+
+class LastCleanTimeSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
+    """Sensor for the duration of the last cleaning session (DPS 109)."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_name = "Last Clean Time"
+    _attr_icon = "mdi:clock-outline"
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.data is not None and "109" in self.coordinator.data
+
+    @property
+    def native_value(self) -> int | None:
+        if self.coordinator.data:
+            value = self.coordinator.data.get("109")
+            if value is not None:
+                try:
+                    return int(value)
+                except (ValueError, TypeError):
+                    pass
+        return None
+
+
+class LastCleanAreaSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
+    """Sensor for the area covered in the last cleaning session (DPS 110)."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_name = "Last Clean Area"
+    _attr_icon = "mdi:texture-box"
+    _attr_native_unit_of_measurement = "m²"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.data is not None and "110" in self.coordinator.data
+
+    @property
+    def native_value(self) -> int | None:
+        if self.coordinator.data:
+            value = self.coordinator.data.get("110")
+            if value is not None:
+                try:
+                    return int(value)
+                except (ValueError, TypeError):
+                    pass
+        return None
+
+
+class TotalCleanTimeSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
+    """Sensor for total cumulative cleaning time (DPS 119)."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_name = "Total Cleaning Time"
+    _attr_icon = "mdi:clock-outline"
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.data is not None and "119" in self.coordinator.data
+
+    @property
+    def native_value(self) -> int | None:
+        if self.coordinator.data:
+            value = self.coordinator.data.get("119")
+            if value is not None:
+                try:
+                    return int(value)
+                except (ValueError, TypeError):
+                    pass
+        return None
+
+
+class ErrorCodeSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
+    """Sensor for the vacuum error alarm code (DPS 106)."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_name = "Error Code"
+    _attr_icon = "mdi:alert-circle"
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.data is not None and "106" in self.coordinator.data
+
+    @property
+    def native_value(self):
+        if self.coordinator.data:
+            return self.coordinator.data.get("106")
+        return None

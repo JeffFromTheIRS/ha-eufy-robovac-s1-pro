@@ -132,8 +132,9 @@ class CleaningModeSelect(CoordinatorEntity, RestoreEntity, SelectEntity):
         # Try without water level (vacuum mode)
         if dps154 == CLEANING_MODES["vacuum"]["dps154"]:
             return CLEANING_MODES["vacuum"]["name"]
-        
-        return None
+
+        # DPS 154 value doesn't match any known pattern — use restored or default
+        return self._restored_option or CLEANING_MODES["vacuum"]["name"]
 
     async def async_select_option(self, option: str) -> None:
         """Change the selected option."""

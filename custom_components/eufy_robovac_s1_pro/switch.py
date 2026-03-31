@@ -21,9 +21,13 @@ async def async_setup_entry(
     for device_id, props in discovered_devices.items():
         coordinator = props[CONF_COORDINATOR]
         
-        # Only add auto-return switch if the DPS is available
+        # Only add switches if the DPS is available
         if coordinator.data and RobovacDPs.ROBOVAC_AUTO_RETURN_CLEAN_DPS_ID_156 in coordinator.data:
             devices.append(AutoReturnCleaningSwitch(coordinator=coordinator))
+        if coordinator.data and RobovacDPs.ROBOVAC_DO_NOT_DISTURB_DPS_ID_139 in coordinator.data:
+            devices.append(DoNotDisturbSwitch(coordinator=coordinator))
+        if coordinator.data and RobovacDPs.ROBOVAC_BOOST_IQ_DPS_ID_118 in coordinator.data:
+            devices.append(BoostIQSwitch(coordinator=coordinator))
 
     if devices:
         return async_add_devices(devices)
@@ -60,3 +64,63 @@ class AutoReturnCleaningSwitch(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEn
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.coordinator.tuya_client.async_set({RobovacDPs.ROBOVAC_AUTO_RETURN_CLEAN_DPS_ID_156: False})
+
+
+class DoNotDisturbSwitch(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SwitchEntity):
+
+    _attr_name = "Do Not Disturb"
+    _attr_icon = "mdi:sleep"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.data is not None and RobovacDPs.ROBOVAC_DO_NOT_DISTURB_DPS_ID_139 in self.coordinator.data
+
+    @property
+    def is_on(self) -> bool | None:
+        if self.coordinator.data:
+            value = self.coordinator.data.get(RobovacDPs.ROBOVAC_DO_NOT_DISTURB_DPS_ID_139)
+            if isinstance(value, bool):
+                return value
+            elif value is not None:
+                if str(value).lower() in ['true', '1', 'on']:
+                    return True
+                elif str(value).lower() in ['false', '0', 'off']:
+                    return False
+        return None
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.tuya_client.async_set({RobovacDPs.ROBOVAC_DO_NOT_DISTURB_DPS_ID_139: True})
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.tuya_client.async_set({RobovacDPs.ROBOVAC_DO_NOT_DISTURB_DPS_ID_139: False})
+
+
+class BoostIQSwitch(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SwitchEntity):
+
+    _attr_name = "Boost IQ"
+    _attr_icon = "mdi:lightning-bolt"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.data is not None and RobovacDPs.ROBOVAC_BOOST_IQ_DPS_ID_118 in self.coordinator.data
+
+    @property
+    def is_on(self) -> bool | None:
+        if self.coordinator.data:
+            value = self.coordinator.data.get(RobovacDPs.ROBOVAC_BOOST_IQ_DPS_ID_118)
+            if isinstance(value, bool):
+                return value
+            elif value is not None:
+                if str(value).lower() in ['true', '1', 'on']:
+                    return True
+                elif str(value).lower() in ['false', '0', 'off']:
+                    return False
+        return None
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.tuya_client.async_set({RobovacDPs.ROBOVAC_BOOST_IQ_DPS_ID_118: True})
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.tuya_client.async_set({RobovacDPs.ROBOVAC_BOOST_IQ_DPS_ID_118: False})
