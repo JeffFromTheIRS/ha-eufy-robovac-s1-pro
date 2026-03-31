@@ -63,6 +63,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 discovered_device = detected_devices.pop(device_id, None)
                 if discovered_device:
                     device_ip = discovered_device["ip"]
+                    device_mac = discovered_device.get("mac")
 
                     logger.debug(
                         "Found matching discovered device at %s for device ID %s",
@@ -80,6 +81,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         host=device_ip,
                         device_id=device_id,
                         local_key=local_key,
+                        mac=device_mac,
                     )
 
                     # Try to get initial data, but don't fail if it doesn't work

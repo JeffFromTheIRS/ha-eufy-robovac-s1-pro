@@ -11,6 +11,7 @@ from homeassistant.components.vacuum import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -233,6 +234,8 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
         | VacuumEntityFeature.START
         | VacuumEntityFeature.STATE
         | VacuumEntityFeature.FAN_SPEED
+        | VacuumEntityFeature.STOP
+        | VacuumEntityFeature.LOCATE
     )
 
     def __init__(self, coordinator):
@@ -251,12 +254,15 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        return DeviceInfo(
+        info = DeviceInfo(
             identifiers={(DOMAIN, self.unique_id)},
             manufacturer="Eufy",
             name=self.name,
             model="S1 Pro (T2080)",
         )
+        if mac := self.coordinator.mac:
+            info["connections"] = {(CONNECTION_NETWORK_MAC, mac)}
+        return info
 
     @property
     def unique_id(self) -> str:
@@ -376,12 +382,15 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
     def state_attributes(self) -> dict[str, Any]:
         """Return the state attributes of the vacuum."""
         attrs = super().state_attributes or {}
-        
+
         if self.coordinator.data:
             # Only include essential attributes for end users
             if error_code := self.error_code:
                 attrs["error_code"] = error_code
-            
+            if self._substatus:
+                attrs["status"] = self._substatus
+                attrs["is_charging"] = self._substatus in ("charging", "fully_charged")
+
         return attrs
     
     def _is_running(self) -> bool:

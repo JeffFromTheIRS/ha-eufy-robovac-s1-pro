@@ -8,9 +8,10 @@ logger = logging.getLogger(__name__)
 
 
 class EufyTuyaDataUpdateCoordinator(DataUpdateCoordinator):
-    def __init__(self, *args, host: str, device_id: str, local_key: str, **kwargs):
+    def __init__(self, *args, host: str, device_id: str, local_key: str, mac: str | None = None, **kwargs):
         super().__init__(*args, **kwargs)
 
+        self.mac = mac
         self.tuya_client = TuyaDevice(device_id=device_id, local_key=local_key, host=host)
 
         extra_handler_list = [self.handle_tuya_message]
