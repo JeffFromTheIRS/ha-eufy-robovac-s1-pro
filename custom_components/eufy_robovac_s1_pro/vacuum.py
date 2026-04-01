@@ -129,9 +129,14 @@ def decode_dps153_to_state(dps153_value: str) -> tuple[RobovacState, str]:
         if byte1 == 0x10:
             substatus = _get_docked_substatus(decoded)
             return RobovacState.DOCKED, substatus
-        
+
+        # Byte[1]=0x0a with other Byte[2] values (e.g. 0x02) — docked/idle variant
+        if byte1 == 0x0a:
+            substatus = _get_docked_substatus(decoded)
+            return RobovacState.DOCKED, substatus or "idle"
+
         # デフォルトはDocked (未知のパターンでも安全側に倒す)
-        logger.warning(f"Unknown dps153 pattern, defaulting to DOCKED: {hex_str}")
+        logger.debug(f"Unknown dps153 pattern, defaulting to DOCKED: {hex_str}")
         return RobovacState.DOCKED, "idle"
         
     except Exception as e:
