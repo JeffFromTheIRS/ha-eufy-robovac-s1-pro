@@ -57,6 +57,13 @@ async def async_setup_entry(
         if not rooms:
             continue
 
+        # Cache rooms in config entry options for the options flow
+        cached = [{"room_id": r.room_id, "room_type": r.room_type} for r in rooms]
+        if cached != config_entry.options.get("cached_rooms", []):
+            updated = dict(config_entry.options)
+            updated["cached_rooms"] = cached
+            hass.config_entries.async_update_entry(config_entry, options=updated)
+
         for room in rooms:
             entities.append(
                 RoomNameText(

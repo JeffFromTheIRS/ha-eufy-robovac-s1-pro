@@ -99,16 +99,30 @@ async def async_setup_entry(
 # ─── Battery ──────────────────────────────────────────────────────────────────
 
 
-class BatteryPercentageSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
+class BatteryPercentageSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, RestoreEntity, SensorEntity):
     _attr_device_class = SensorDeviceClass.BATTERY
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_native_unit_of_measurement = PERCENTAGE
     _attr_name = "Battery"
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._restored_value = None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state and last_state.state not in (None, "unknown", "unavailable"):
+            try:
+                self._restored_value = int(float(last_state.state))
+            except (ValueError, TypeError):
+                pass
+
     @property
     def available(self) -> bool:
-        return self.coordinator.data is not None and ("8" in self.coordinator.data or "163" in self.coordinator.data)
+        has_live = self.coordinator.data is not None and ("8" in self.coordinator.data or "163" in self.coordinator.data)
+        return has_live or self._restored_value is not None
 
     @property
     def icon(self) -> str:
@@ -128,7 +142,7 @@ class BatteryPercentageSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEnt
                             return battery
                     except (ValueError, TypeError):
                         pass
-        return None
+        return self._restored_value
 
 
 # ─── Status ───────────────────────────────────────────────────────────
@@ -319,7 +333,7 @@ class TotalCleaningTimeSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEnt
         return self._last_valid
 
 
-class LastCleanTimeSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
+class LastCleanTimeSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, RestoreEntity, SensorEntity):
     """Last cleaning session duration from DPS 167 protobuf."""
 
     _attr_name = "Last Clean Time"
@@ -329,9 +343,23 @@ class LastCleanTimeSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity,
     _attr_native_unit_of_measurement = UnitOfTime.SECONDS
     _attr_state_class = SensorStateClass.MEASUREMENT
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._restored_value = None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state and last_state.state not in (None, "unknown", "unavailable"):
+            try:
+                self._restored_value = int(float(last_state.state))
+            except (ValueError, TypeError):
+                pass
+
     @property
     def available(self) -> bool:
-        return self.coordinator.data is not None and "167" in self.coordinator.data
+        has_live = self.coordinator.data is not None and "167" in self.coordinator.data
+        return has_live or self._restored_value is not None
 
     @property
     def native_value(self) -> int | None:
@@ -340,10 +368,10 @@ class LastCleanTimeSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity,
             stats = parse_dps167(dps167)
             if stats and stats.last_clean:
                 return stats.last_clean.time_seconds
-        return None
+        return self._restored_value
 
 
-class LastCleanAreaSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
+class LastCleanAreaSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, RestoreEntity, SensorEntity):
     """Last cleaning session area from DPS 167 protobuf."""
 
     _attr_name = "Last Clean Area"
@@ -352,9 +380,23 @@ class LastCleanAreaSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity,
     _attr_native_unit_of_measurement = "m²"
     _attr_state_class = SensorStateClass.MEASUREMENT
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._restored_value = None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state and last_state.state not in (None, "unknown", "unavailable"):
+            try:
+                self._restored_value = int(float(last_state.state))
+            except (ValueError, TypeError):
+                pass
+
     @property
     def available(self) -> bool:
-        return self.coordinator.data is not None and "167" in self.coordinator.data
+        has_live = self.coordinator.data is not None and "167" in self.coordinator.data
+        return has_live or self._restored_value is not None
 
     @property
     def native_value(self) -> int | None:
@@ -363,13 +405,13 @@ class LastCleanAreaSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity,
             stats = parse_dps167(dps167)
             if stats and stats.last_clean:
                 return stats.last_clean.area_sqm
-        return None
+        return self._restored_value
 
 
 # ─── DPS 168: Consumable Life (protobuf) ─────────────────────────────────────
 
 
-class ConsumableLifeProtobufSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
+class ConsumableLifeProtobufSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, RestoreEntity, SensorEntity):
     """Consumable life remaining %, decoded from DPS 168 protobuf."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -381,23 +423,33 @@ class ConsumableLifeProtobufSensor(CoordinatorTuyaDeviceUniqueIDMixin, Coordinat
         self._consumable_key = consumable_key
         self._attr_name = name
         self._attr_icon = icon
+        self._restored_value = None
         super().__init__(coordinator=coordinator)
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state and last_state.state not in (None, "unknown", "unavailable"):
+            try:
+                self._restored_value = float(last_state.state)
+            except (ValueError, TypeError):
+                pass
 
     @property
     def available(self) -> bool:
-        return self.coordinator.data is not None and "168" in self.coordinator.data
+        has_live = self.coordinator.data is not None and "168" in self.coordinator.data
+        return has_live or self._restored_value is not None
 
     @property
     def native_value(self) -> float | None:
         dps168 = (self.coordinator.data or {}).get("168", "")
-        if not dps168:
-            return None
+        if dps168:
+            consumables = parse_dps168(dps168)
+            for c in consumables:
+                if c.field_id == self._consumable_field_id:
+                    return c.life_remaining_pct
 
-        consumables = parse_dps168(dps168)
-        for c in consumables:
-            if c.field_id == self._consumable_field_id:
-                return c.life_remaining_pct
-        return None
+        return self._restored_value
 
     @property
     def extra_state_attributes(self) -> dict | None:
@@ -416,29 +468,38 @@ class ConsumableLifeProtobufSensor(CoordinatorTuyaDeviceUniqueIDMixin, Coordinat
 # ─── DPS 164: Room Definitions (diagnostic) ──────────────────────────────────
 
 
-class RoomDefinitionsSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
+class RoomDefinitionsSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, RestoreEntity, SensorEntity):
     """Diagnostic sensor showing decoded room definitions from DPS 164."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_name = "Room Definitions"
     _attr_icon = "mdi:floor-plan"
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._restored_value = None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state and last_state.state not in (None, "unknown", "unavailable"):
+            self._restored_value = last_state.state
+
     @property
     def available(self) -> bool:
-        return self.coordinator.data is not None and "164" in self.coordinator.data
+        has_live = self.coordinator.data is not None and "164" in self.coordinator.data
+        return has_live or self._restored_value is not None
 
     @property
     def native_value(self) -> str | None:
         dps164 = (self.coordinator.data or {}).get("164", "")
-        if not dps164:
-            return None
-
-        rooms = parse_dps164(dps164)
-        if not rooms:
+        if dps164:
+            rooms = parse_dps164(dps164)
+            if rooms:
+                names = [r.default_name for r in rooms]
+                return ", ".join(names)
             return "No rooms"
-
-        names = [r.default_name for r in rooms]
-        return ", ".join(names)
+        return self._restored_value
 
     @property
     def extra_state_attributes(self) -> dict | None:
