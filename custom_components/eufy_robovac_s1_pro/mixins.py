@@ -4,13 +4,15 @@ from .const import DOMAIN
 
 
 class CoordinatorTuyaDeviceUniqueIDMixin:
+    _attr_has_entity_name = True
+
     @property
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
             identifiers={(DOMAIN, self.coordinator.tuya_client.device_id)},
             manufacturer="Eufy",
-            # points to parent Eufy Vacuum device
-            via_device=(DOMAIN, self.coordinator.tuya_client.device_id),
+            name="Eufy Robovac S1 Pro",
+            model="S1 Pro (T2080)",
         )
 
     @property

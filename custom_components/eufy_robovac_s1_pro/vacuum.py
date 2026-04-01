@@ -308,7 +308,8 @@ async def async_setup_entry(
 
 class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
 
-    _attr_name = "Eufy Robovac S1 Pro"
+    _attr_has_entity_name = True
+    _attr_name = None  # Use device name directly
     _attr_supported_features = (
         VacuumEntityFeature.BATTERY
         | VacuumEntityFeature.PAUSE
@@ -339,7 +340,7 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
         return DeviceInfo(
             identifiers={(DOMAIN, self.unique_id)},
             manufacturer="Eufy",
-            name=self.name,
+            name="Eufy Robovac S1 Pro",
             model="S1 Pro (T2080)",
         )
 
@@ -369,6 +370,18 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
             
             logger.debug(f"Detected state: {detected_state.value}, substatus: {substatus}")
             
+            # Battery sanity check: if state says RETURNING but battery
+            # is full, the vacuum has already docked — override to DOCKED.
+            if detected_state == RobovacState.RETURNING:
+                battery = self.coordinator.data.get("8") or self.coordinator.data.get("163", 0)
+                try:
+                    if int(battery) >= 95:
+                        detected_state = RobovacState.DOCKED
+                        substatus = "idle"
+                        logger.debug("Overriding RETURNING → DOCKED (battery %s%%)", battery)
+                except (ValueError, TypeError):
+                    pass
+
             # 状態に応じたフラグ更新と値の返却
             if detected_state == RobovacState.CLEANING:
                 self._was_paused = False

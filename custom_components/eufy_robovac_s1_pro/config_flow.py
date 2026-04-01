@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 EUFY_LOGIN_SCHEMA = vol.Schema({vol.Required("username"): str, vol.Required("password"): str})
 
 CONF_ROOM_NAMES = "room_names"
+CONF_CACHED_ROOMS = "cached_rooms"
 
 
 class EufyVacuumConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -62,19 +63,42 @@ class EufyVacuumOptionsFlow(OptionsFlow):
         self._config_entry = config_entry
 
     def _get_rooms(self) -> list[tuple[int, int]]:
-        """Get (room_id, room_type) pairs from coordinator data."""
+        """Get (room_id, room_type) pairs from coordinator data or stored cache."""
         rooms: list[tuple[int, int]] = []
         entry_data = self.hass.data.get(DOMAIN, {}).get(self._config_entry.entry_id, {})
         discovered = entry_data.get(CONF_DISCOVERED_DEVICES, {})
 
+        # Try live coordinator data first
         for device_id, props in discovered.items():
             coordinator = props.get(CONF_COORDINATOR)
             if coordinator and coordinator.data:
                 dps164 = coordinator.data.get("164", "")
                 if dps164:
-                    for r in parse_dps164(dps164):
+                    parsed = parse_dps164(dps164)
+                    for r in parsed:
                         rooms.append((r.room_id, r.room_type))
+                    # Cache rooms in options for future use
+                    if rooms:
+                        self._cache_rooms(rooms)
+
+        # Fallback to cached rooms if live data unavailable
+        if not rooms:
+            cached = self._config_entry.options.get(CONF_CACHED_ROOMS, [])
+            for entry in cached:
+                rooms.append((entry["room_id"], entry["room_type"]))
+
         return rooms
+
+    def _cache_rooms(self, rooms: list[tuple[int, int]]) -> None:
+        """Store room list in config entry options so it survives restarts."""
+        cached = [{"room_id": rid, "room_type": rtype} for rid, rtype in rooms]
+        current = self._config_entry.options.get(CONF_CACHED_ROOMS, [])
+        if cached != current:
+            updated_options = dict(self._config_entry.options)
+            updated_options[CONF_CACHED_ROOMS] = cached
+            self.hass.config_entries.async_update_entry(
+                self._config_entry, options=updated_options
+            )
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
