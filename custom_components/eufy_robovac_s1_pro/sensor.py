@@ -437,7 +437,8 @@ class RoomDefinitionsSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntit
         if not rooms:
             return "No rooms"
 
-        return f"{len(rooms)} rooms"
+        names = [r.default_name for r in rooms]
+        return ", ".join(names)
 
     @property
     def extra_state_attributes(self) -> dict | None:
@@ -452,9 +453,10 @@ class RoomDefinitionsSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntit
             room_list.append({
                 "room_id": r.room_id,
                 "room_type": r.room_type,
+                "default_name": r.default_name,
             })
 
-        return {"rooms": room_list}
+        return {"rooms": room_list, "room_count": len(room_list)}
 
 
 # ─── Raw DPS Diagnostic Sensors (room/map exploration) ──────────────────────

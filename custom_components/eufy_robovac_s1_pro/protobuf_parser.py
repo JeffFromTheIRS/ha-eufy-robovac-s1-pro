@@ -271,12 +271,65 @@ def parse_dps168(b64_value: str) -> list[ConsumableUsage]:
 # ─── DPS 164: Room Definitions ────────────────────────────────────────────────
 
 
+# Eufy room type codes → default English names.
+# Sourced from Eufy app room-type presets.  Unknown codes fall back to
+# "Room <id>".
+EUFY_ROOM_TYPES: dict[int, str] = {
+    1: "Living Room",
+    2: "Master Bedroom",
+    3: "Guest Bedroom",
+    4: "Kids Room",
+    5: "Study",
+    6: "Kitchen",
+    7: "Dining Room",
+    8: "Bathroom",
+    9: "Balcony",
+    10: "Hallway",
+    11: "Laundry Room",
+    12: "Storage Room",
+    13: "Garage",
+    14: "Gym",
+    15: "Office",
+    16: "Corridor",
+    17: "Entrance",
+    18: "Cloakroom",
+    19: "Playroom",
+    20: "Pet Room",
+    21: "Closet",
+    22: "Pantry",
+    23: "Nursery",
+    24: "Den",
+    25: "Sunroom",
+    26: "Attic",
+    27: "Basement",
+    28: "Workshop",
+    29: "Patio",
+    30: "Foyer",
+    31: "Mud Room",
+    32: "Utility Room",
+    33: "Sitting Room",
+    34: "Lounge",
+    35: "Library",
+    36: "Theater Room",
+    37: "Music Room",
+    38: "Bar",
+    39: "Wine Cellar",
+    40: "Guest Bath",
+}
+
+
 @dataclass
 class RoomDefinition:
     """A room definition from DPS 164."""
     room_id: int = 0
     room_type: int = 0
+    default_name: str = ""
     raw_fields: dict = field(default_factory=dict)
+
+
+def room_type_to_name(room_type: int, room_id: int) -> str:
+    """Resolve a room type code to a human-readable default name."""
+    return EUFY_ROOM_TYPES.get(room_type, f"Room {room_id}")
 
 
 def parse_dps164(b64_value: str) -> list[RoomDefinition]:
@@ -287,8 +340,9 @@ def parse_dps164(b64_value: str) -> list[RoomDefinition]:
       Field 2 (varint): unknown
       Field 3 (LEN): empty
       Field 4 (LEN, repeated): Room definition
-        - Field 1 (LEN): {field 1: room_id}
-        - Field 17 (varint): room_type
+        - Field 1 (LEN): sub-message → field 1 (varint): room_id
+        - Field 3 (LEN): cleaning config sub-message
+            - Field 3 (LEN): sub-message → field 1 (varint): room_type code
     """
     rooms: list[RoomDefinition] = []
     try:
@@ -311,17 +365,26 @@ def parse_dps164(b64_value: str) -> list[RoomDefinition]:
                 id_fields = decode_message(id_bytes)
                 room_id = get_varint(id_fields, 1)
 
-            room_type = get_varint(room_fields, 17)
+            # Room type is at field 3 → field 3 → field 1
+            room_type = 0
+            f3_bytes = get_bytes(room_fields, 3)
+            if f3_bytes:
+                f3_fields = decode_message(f3_bytes)
+                f3_3_bytes = get_bytes(f3_fields, 3)
+                if f3_3_bytes:
+                    f3_3_fields = decode_message(f3_3_bytes)
+                    room_type = get_varint(f3_3_fields, 1)
 
             rooms.append(RoomDefinition(
                 room_id=room_id,
                 room_type=room_type,
+                default_name=room_type_to_name(room_type, room_id),
                 raw_fields={k: v for k, v in room_fields.items()},
             ))
 
         _LOGGER.debug("Parsed %d rooms from DPS 164: %s",
                        len(rooms),
-                       [(r.room_id, r.room_type) for r in rooms])
+                       [(r.room_id, r.room_type, r.default_name) for r in rooms])
 
     except Exception as e:
         _LOGGER.debug("Error parsing DPS 164: %s", e)
