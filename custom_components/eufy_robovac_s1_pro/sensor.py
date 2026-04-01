@@ -10,7 +10,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 import base64
 import logging
 
-from .const import CONF_COORDINATOR, CONF_DISCOVERED_DEVICES, DOMAIN
+from .const import CONF_COORDINATOR, CONF_DISCOVERED_DEVICES, DOMAIN, RobovacDPs
 from .coordinators import EufyTuyaDataUpdateCoordinator
 from .mixins import CoordinatorTuyaDeviceUniqueIDMixin
 # vacuum.pyから状態判定関数と説明文をインポート
@@ -148,30 +148,65 @@ async def async_setup_entry(
         # TODO: Uncomment when time data position is identified
         # devices.append(TotalCleaningTimeSensor(coordinator=coordinator))
 
-        # Consumable life sensors (conditional on DPS presence)
-        consumables = [
-            ("112", "Side Brush Life", "mdi:broom"),
-            ("113", "Main Brush Life", "mdi:broom"),
-            ("114", "Filter Life", "mdi:air-filter"),
-            ("127", "Sensor Life", "mdi:leak"),
-        ]
-        for dps_id, name, icon in consumables:
-            if coordinator.data and dps_id in coordinator.data:
-                devices.append(ConsumableLifeSensor(coordinator=coordinator, dps_id=dps_id, name=name, icon=icon))
+        # Consumable life sensors (conditional on DPS availability)
+        if coordinator.data and RobovacDPs.ROBOVAC_SIDE_BSHTM_DPS_ID_112 in coordinator.data:
+            devices.append(ConsumableLifeSensor(
+                coordinator=coordinator,
+                dps_id=RobovacDPs.ROBOVAC_SIDE_BSHTM_DPS_ID_112,
+                name="Side Brush Life",
+                icon="mdi:broom",
+            ))
+        if coordinator.data and RobovacDPs.ROBOVAC_MAIN_BSHTM_DPS_ID_113 in coordinator.data:
+            devices.append(ConsumableLifeSensor(
+                coordinator=coordinator,
+                dps_id=RobovacDPs.ROBOVAC_MAIN_BSHTM_DPS_ID_113,
+                name="Main Brush Life",
+                icon="mdi:broom",
+            ))
+        if coordinator.data and RobovacDPs.ROBOVAC_FILETR_TM_DPS_ID_114 in coordinator.data:
+            devices.append(ConsumableLifeSensor(
+                coordinator=coordinator,
+                dps_id=RobovacDPs.ROBOVAC_FILETR_TM_DPS_ID_114,
+                name="Filter Life",
+                icon="mdi:air-filter",
+            ))
+        if coordinator.data and RobovacDPs.ROBOVAC_SENSOR_TM_DPS_ID_127 in coordinator.data:
+            devices.append(ConsumableLifeSensor(
+                coordinator=coordinator,
+                dps_id=RobovacDPs.ROBOVAC_SENSOR_TM_DPS_ID_127,
+                name="Sensor Life",
+                icon="mdi:leak",
+            ))
 
-        # Last clean time/area sensors (conditional on DPS presence)
-        if coordinator.data and "109" in coordinator.data:
+        # Last clean time and area sensors
+        if coordinator.data and RobovacDPs.ROBOVAC_CLEAR_TIME_DPS_ID_109 in coordinator.data:
             devices.append(LastCleanTimeSensor(coordinator=coordinator))
-        if coordinator.data and "110" in coordinator.data:
+        if coordinator.data and RobovacDPs.ROBOVAC_CLEAR_AREA_DPS_ID_110 in coordinator.data:
             devices.append(LastCleanAreaSensor(coordinator=coordinator))
 
-        # Total clean time sensor (conditional on DPS presence)
-        if coordinator.data and "119" in coordinator.data:
+        # Total clean time sensor
+        if coordinator.data and RobovacDPs.ROBOVAC_CLEAR_TOTAL_TIME_DPS_ID_119 in coordinator.data:
             devices.append(TotalCleanTimeSensor(coordinator=coordinator))
 
-        # Error code sensor (conditional on DPS presence)
-        if coordinator.data and "106" in coordinator.data:
+        # Error code sensor
+        if coordinator.data and RobovacDPs.ROBOVAC_ERROR_ALARM_DPS_ID_106 in coordinator.data:
             devices.append(ErrorCodeSensor(coordinator=coordinator))
+
+        # Raw diagnostic sensors for room/map DPS reverse engineering
+        raw_dps_sensors = [
+            (RobovacDPs.ROBOVAC_SMART_ROOMS_DPS_ID_140, "Smart Rooms Data", "mdi:floor-plan"),
+            (RobovacDPs.ROBOVAC_AREA_CLEAN_DPS_ID_116, "Area Clean Data", "mdi:selection-ellipse"),
+            (RobovacDPs.ROBOVAC_AREA_CLEAN_ACTIVE_DPS_ID_117, "Area Clean Active", "mdi:play-circle-outline"),
+            (RobovacDPs.ROBOVAC_GET_MAP_OR_PATH_DATA_DPS_ID_121, "Map Data", "mdi:map"),
+        ]
+        for dps_id, name, icon in raw_dps_sensors:
+            if coordinator.data and dps_id in coordinator.data:
+                devices.append(RawDPSDiagnosticSensor(
+                    coordinator=coordinator,
+                    dps_id=dps_id,
+                    name=name,
+                    icon=icon,
+                ))
 
     if devices:
         return async_add_devices(devices)
@@ -308,16 +343,14 @@ class RunningStatusSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity,
             
             return status_description
         
-        # Fallback: infer from battery level when DPS 153 is absent (e.g. docked/idle)
-        battery = self.coordinator.data.get("8") or self.coordinator.data.get("163")
-        if battery is not None:
-            try:
-                b = int(battery)
-                return "Fully Charged" if b >= 100 else "Charging"
-            except (ValueError, TypeError):
-                pass
-
-        return "Idle"
+        # Fallback to DPS 2 if DPS 153 is not available
+        dps2 = self.coordinator.data.get("2")
+        if dps2 is True:
+            return "Running"
+        elif dps2 is False:
+            return "Stopped"
+        
+        return "Unknown"
     
     @property
     def icon(self) -> str:
@@ -472,6 +505,156 @@ class TotalCleaningAreaSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEnt
             return self._last_valid_area
 
 
+class ConsumableLifeSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
+    """Sensor for consumable life percentage (side brush, main brush, filter, sensor)."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator, dps_id: str, name: str, icon: str):
+        self._dps_id = dps_id
+        self._attr_name = name
+        self._attr_icon = icon
+        super().__init__(coordinator=coordinator)
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.data is not None and self._dps_id in self.coordinator.data
+
+    @property
+    def native_value(self) -> int | None:
+        if self.coordinator.data:
+            value = self.coordinator.data.get(self._dps_id)
+            if value is not None:
+                try:
+                    return int(value)
+                except (ValueError, TypeError):
+                    pass
+        return None
+
+
+class LastCleanTimeSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
+    """Sensor for last clean duration from DPS 109."""
+
+    _attr_name = "Last Clean Time"
+    _attr_icon = "mdi:clock-outline"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.data is not None and RobovacDPs.ROBOVAC_CLEAR_TIME_DPS_ID_109 in self.coordinator.data
+
+    @property
+    def native_value(self) -> int | None:
+        if self.coordinator.data:
+            value = self.coordinator.data.get(RobovacDPs.ROBOVAC_CLEAR_TIME_DPS_ID_109)
+            if value is not None:
+                try:
+                    return int(value)
+                except (ValueError, TypeError):
+                    pass
+        return None
+
+
+class LastCleanAreaSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
+    """Sensor for last clean area from DPS 110."""
+
+    _attr_name = "Last Clean Area"
+    _attr_icon = "mdi:texture-box"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_native_unit_of_measurement = "m²"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.data is not None and RobovacDPs.ROBOVAC_CLEAR_AREA_DPS_ID_110 in self.coordinator.data
+
+    @property
+    def native_value(self) -> int | None:
+        if self.coordinator.data:
+            value = self.coordinator.data.get(RobovacDPs.ROBOVAC_CLEAR_AREA_DPS_ID_110)
+            if value is not None:
+                try:
+                    return int(value)
+                except (ValueError, TypeError):
+                    pass
+        return None
+
+
+class TotalCleanTimeSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
+    """Sensor for total cleaning time from DPS 119."""
+
+    _attr_name = "Total Cleaning Time"
+    _attr_icon = "mdi:clock-outline"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.data is not None and RobovacDPs.ROBOVAC_CLEAR_TOTAL_TIME_DPS_ID_119 in self.coordinator.data
+
+    @property
+    def native_value(self) -> int | None:
+        if self.coordinator.data:
+            value = self.coordinator.data.get(RobovacDPs.ROBOVAC_CLEAR_TOTAL_TIME_DPS_ID_119)
+            if value is not None:
+                try:
+                    return int(value)
+                except (ValueError, TypeError):
+                    pass
+        return None
+
+
+class ErrorCodeSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
+    """Sensor for error alarm code from DPS 106."""
+
+    _attr_name = "Error Code"
+    _attr_icon = "mdi:alert-circle-outline"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.data is not None and RobovacDPs.ROBOVAC_ERROR_ALARM_DPS_ID_106 in self.coordinator.data
+
+    @property
+    def native_value(self) -> str | None:
+        if self.coordinator.data:
+            value = self.coordinator.data.get(RobovacDPs.ROBOVAC_ERROR_ALARM_DPS_ID_106)
+            if value is not None:
+                return str(value)
+        return None
+
+
+class RawDPSDiagnosticSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
+    """Diagnostic sensor that exposes raw DPS values for reverse engineering."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator, dps_id: str, name: str, icon: str):
+        self._dps_id = dps_id
+        self._attr_name = name
+        self._attr_icon = icon
+        super().__init__(coordinator=coordinator)
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.data is not None and self._dps_id in self.coordinator.data
+
+    @property
+    def native_value(self) -> str | None:
+        if self.coordinator.data:
+            value = self.coordinator.data.get(self._dps_id)
+            if value is not None:
+                return str(value)
+        return None
+
+
 # TODO: Uncomment when time data position is identified in DPS 167 or DPS 168
 # class TotalCleaningTimeSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
 #     """Sensor for total cleaning time from DPS 167.
@@ -510,127 +693,3 @@ class TotalCleaningAreaSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEnt
 #         
 #         stats = parse_dps167_statistics(dps167)
 #         return stats.get("total_time_mins")
-
-
-class ConsumableLifeSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
-    """Sensor for consumable remaining life (side brush, main brush, filter, sensor)."""
-
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_native_unit_of_measurement = PERCENTAGE
-    _attr_state_class = SensorStateClass.MEASUREMENT
-
-    def __init__(self, coordinator, dps_id: str, name: str, icon: str):
-        self._dps_id = dps_id
-        self._attr_name = name
-        self._attr_icon = icon
-        super().__init__(coordinator=coordinator)
-
-    @property
-    def available(self) -> bool:
-        return self.coordinator.data is not None and self._dps_id in self.coordinator.data
-
-    @property
-    def native_value(self) -> int | None:
-        if self.coordinator.data:
-            value = self.coordinator.data.get(self._dps_id)
-            if value is not None:
-                try:
-                    return int(value)
-                except (ValueError, TypeError):
-                    pass
-        return None
-
-
-class LastCleanTimeSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
-    """Sensor for the duration of the last cleaning session (DPS 109)."""
-
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_name = "Last Clean Time"
-    _attr_icon = "mdi:clock-outline"
-    _attr_device_class = SensorDeviceClass.DURATION
-    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
-    _attr_state_class = SensorStateClass.MEASUREMENT
-
-    @property
-    def available(self) -> bool:
-        return self.coordinator.data is not None and "109" in self.coordinator.data
-
-    @property
-    def native_value(self) -> int | None:
-        if self.coordinator.data:
-            value = self.coordinator.data.get("109")
-            if value is not None:
-                try:
-                    return int(value)
-                except (ValueError, TypeError):
-                    pass
-        return None
-
-
-class LastCleanAreaSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
-    """Sensor for the area covered in the last cleaning session (DPS 110)."""
-
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_name = "Last Clean Area"
-    _attr_icon = "mdi:texture-box"
-    _attr_native_unit_of_measurement = "m²"
-    _attr_state_class = SensorStateClass.MEASUREMENT
-
-    @property
-    def available(self) -> bool:
-        return self.coordinator.data is not None and "110" in self.coordinator.data
-
-    @property
-    def native_value(self) -> int | None:
-        if self.coordinator.data:
-            value = self.coordinator.data.get("110")
-            if value is not None:
-                try:
-                    return int(value)
-                except (ValueError, TypeError):
-                    pass
-        return None
-
-
-class TotalCleanTimeSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
-    """Sensor for total cumulative cleaning time (DPS 119)."""
-
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_name = "Total Cleaning Time"
-    _attr_icon = "mdi:clock-outline"
-    _attr_device_class = SensorDeviceClass.DURATION
-    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING
-
-    @property
-    def available(self) -> bool:
-        return self.coordinator.data is not None and "119" in self.coordinator.data
-
-    @property
-    def native_value(self) -> int | None:
-        if self.coordinator.data:
-            value = self.coordinator.data.get("119")
-            if value is not None:
-                try:
-                    return int(value)
-                except (ValueError, TypeError):
-                    pass
-        return None
-
-
-class ErrorCodeSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
-    """Sensor for the vacuum error alarm code (DPS 106)."""
-
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_name = "Error Code"
-    _attr_icon = "mdi:alert-circle"
-
-    @property
-    def available(self) -> bool:
-        return self.coordinator.data is not None and "106" in self.coordinator.data
-
-    @property
-    def native_value(self):
-        if self.coordinator.data:
-            return self.coordinator.data.get("106")
-        return None

@@ -11,7 +11,6 @@ from homeassistant.components.vacuum import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -254,15 +253,12 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        info = DeviceInfo(
+        return DeviceInfo(
             identifiers={(DOMAIN, self.unique_id)},
             manufacturer="Eufy",
             name=self.name,
             model="S1 Pro (T2080)",
         )
-        if mac := self.coordinator.mac:
-            info["connections"] = {(CONNECTION_NETWORK_MAC, mac)}
-        return info
 
     @property
     def unique_id(self) -> str:
@@ -344,7 +340,7 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
             else:
                 return VacuumActivity.IDLE
         
-        # No known pattern matched — infer from battery level
+        # Battery-based DOCKED detection as last resort
         battery = self.coordinator.data.get("8") or self.coordinator.data.get("163", 0)
         try:
             if int(battery) >= 95:
@@ -382,15 +378,12 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
     def state_attributes(self) -> dict[str, Any]:
         """Return the state attributes of the vacuum."""
         attrs = super().state_attributes or {}
-
+        
         if self.coordinator.data:
             # Only include essential attributes for end users
             if error_code := self.error_code:
                 attrs["error_code"] = error_code
-            if self._substatus:
-                attrs["status"] = self._substatus
-                attrs["is_charging"] = self._substatus in ("charging", "fully_charged")
-
+            
         return attrs
     
     def _is_running(self) -> bool:
@@ -417,11 +410,10 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
 
     @property
     def error_code(self) -> str | None:
-        """Return error code if any."""
+        """Return error code from DPS 106 if any."""
         if self.coordinator.data:
-            # Check if DPS 6 has an error value (high numbers)
-            error_code = self.coordinator.data.get("6")
-            if isinstance(error_code, int) and error_code >= 100:
+            error_code = self.coordinator.data.get("106")
+            if error_code is not None and str(error_code) not in ("0", "no_error", ""):
                 return str(error_code)
         return None
 

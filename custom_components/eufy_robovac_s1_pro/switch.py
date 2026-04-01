@@ -20,7 +20,7 @@ async def async_setup_entry(
 
     for device_id, props in discovered_devices.items():
         coordinator = props[CONF_COORDINATOR]
-        
+
         # Only add switches if the DPS is available
         if coordinator.data and RobovacDPs.ROBOVAC_AUTO_RETURN_CLEAN_DPS_ID_156 in coordinator.data:
             devices.append(AutoReturnCleaningSwitch(coordinator=coordinator))
