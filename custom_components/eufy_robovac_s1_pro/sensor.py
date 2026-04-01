@@ -2,7 +2,7 @@
 
 Sensors are organized by data source:
 - Battery: DPS 8/163 (direct numeric values)
-- Running Status: DPS 153 (binary pattern-decoded in vacuum.py)
+- Status: DPS 153 (binary pattern-decoded in vacuum.py)
 - Cleaning Statistics: DPS 167 (protobuf — last clean, totals)
 - Consumable Life: DPS 168 (protobuf — usage counters)
 - Room Definitions: DPS 164 (protobuf — diagnostic only)
@@ -79,8 +79,8 @@ async def async_setup_entry(
         # These DPS keys may only appear when room cleaning is triggered
         # from the Eufy app. Capturing them helps decode the data format.
         raw_dps_sensors = [
-            ("140", "Smart Rooms Data", "mdi:floor-plan"),
-            ("116", "Area Clean Data", "mdi:selection-ellipse"),
+            ("140", "Room Config", "mdi:floor-plan"),
+            ("116", "Area Clean Command", "mdi:selection-ellipse"),
             ("117", "Area Clean Active", "mdi:play-circle-outline"),
             ("121", "Map Data", "mdi:map"),
         ]
@@ -131,14 +131,14 @@ class BatteryPercentageSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEnt
         return None
 
 
-# ─── Running Status ───────────────────────────────────────────────────────────
+# ─── Status ───────────────────────────────────────────────────────────
 
 
 class RunningStatusSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, RestoreEntity, SensorEntity):
     """Detailed running status decoded from DPS 153."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_name = "Running Status"
+    _attr_name = "Status"
     _attr_icon = "mdi:robot-vacuum"
 
     def __init__(self, *args, **kwargs):

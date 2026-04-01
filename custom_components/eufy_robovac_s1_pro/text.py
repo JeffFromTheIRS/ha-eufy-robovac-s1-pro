@@ -57,9 +57,6 @@ async def async_setup_entry(
         if not rooms:
             continue
 
-        # Load any previously-saved custom names from config entry options
-        saved_names: dict[str, str] = config_entry.options.get(CONF_ROOM_NAMES, {})
-
         for room in rooms:
             entities.append(
                 RoomNameText(
@@ -67,7 +64,6 @@ async def async_setup_entry(
                     config_entry=config_entry,
                     room_id=room.room_id,
                     room_type=room.room_type,
-                    saved_name=saved_names.get(str(room.room_id)),
                 )
             )
 
@@ -96,20 +92,24 @@ class RoomNameText(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, TextEn
         config_entry: ConfigEntry,
         room_id: int,
         room_type: int,
-        saved_name: str | None,
     ):
         self._room_id = room_id
         self._room_type = room_type
         self._config_entry = config_entry
         self._default_name = room_type_to_name(room_type, room_id)
-        self._custom_name = saved_name
         self._attr_name = f"Room {room_id} Name"
         super().__init__(coordinator=coordinator)
 
     @property
+    def _saved_name(self) -> str | None:
+        """Read the current custom name from config entry options (single source of truth)."""
+        names = self._config_entry.options.get(CONF_ROOM_NAMES, {})
+        return names.get(str(self._room_id))
+
+    @property
     def native_value(self) -> str:
         """Return the custom name, or the default if none is set."""
-        return self._custom_name or self._default_name
+        return self._saved_name or self._default_name
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -117,26 +117,21 @@ class RoomNameText(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, TextEn
             "room_id": self._room_id,
             "room_type": self._room_type,
             "default_name": self._default_name,
-            "is_custom": self._custom_name is not None,
+            "is_custom": self._saved_name is not None,
         }
 
     async def async_set_value(self, value: str) -> None:
         """Update the room name and persist it in config entry options."""
         value = value.strip()
-        if not value or value == self._default_name:
-            # Revert to default
-            self._custom_name = None
-        else:
-            self._custom_name = value
 
-        # Persist to config entry options
         current_options = dict(self._config_entry.options)
         room_names: dict[str, str] = dict(current_options.get(CONF_ROOM_NAMES, {}))
 
-        if self._custom_name:
-            room_names[str(self._room_id)] = self._custom_name
-        else:
+        if not value or value == self._default_name:
+            # Revert to default
             room_names.pop(str(self._room_id), None)
+        else:
+            room_names[str(self._room_id)] = value
 
         current_options[CONF_ROOM_NAMES] = room_names
         self.hass.config_entries.async_update_entry(
@@ -145,8 +140,7 @@ class RoomNameText(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, TextEn
 
         self.async_write_ha_state()
         logger.info(
-            "Room %d name %s to: %s",
+            "Room %d name set to: %s",
             self._room_id,
-            "reset" if not self._custom_name else "set",
             self.native_value,
         )

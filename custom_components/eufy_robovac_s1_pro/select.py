@@ -16,36 +16,25 @@ from .mixins import CoordinatorTuyaDeviceUniqueIDMixin
 
 logger = logging.getLogger(__name__)
 
-# S1 Pro Cleaning Mode definitions
+# S1 Pro Cleaning Mode definitions — simplified to two options.
+# Water level is controlled separately via the Mop Intensity select entity.
 CLEANING_MODES = {
     "vacuum": {
-        "name": "Vacuum Only",
+        "name": "Vacuum",
         "dps154": "FAoKCgASABoAIgIIAhIGCAEQASAB",
-        "dps10": None
+        "dps10": None,
     },
-    "mop_low": {
-        "name": "Vacuum and Mop (Water Level: Low)",
-        "dps154": "FAoKCgIIAhIAGgAiABIGCAEQASAB",
-        "dps10": "low"
-    },
-    "mop_middle": {
-        "name": "Vacuum and Mop (Water Level: Medium)",
+    "vacuum_and_mop": {
+        "name": "Vacuum and Mop",
+        # Default to medium water level; Mop Intensity select handles changes
         "dps154": "FgoMCgIIAhIAGgAiAggBEgYIARABIAE=",
-        "dps10": "middle"
+        "dps10": "middle",
     },
-    "mop_high": {
-        "name": "Vacuum and Mop (Water Level: High)",
-        "dps154": "FgoMCgIIAhIAGgAiAggCEgYIARABIAE=",
-        "dps10": "high"
-    }
 }
 
-# Map DPS values to mode names
-DPS_TO_MODE_MAP = {
-    ("FAoKCgASABoAIgIIAhIGCAEQASAB", None): "vacuum",
-    ("FAoKCgIIAhIAGgAiABIGCAEQASAB", "low"): "mop_low",
-    ("FgoMCgIIAhIAGgAiAggBEgYIARABIAE=", "middle"): "mop_middle",
-    ("FgoMCgIIAhIAGgAiAggCEgYIARABIAE=", "high"): "mop_high",
+# All known DPS 154 vacuum-only values → "vacuum", everything else → "vacuum_and_mop"
+_VACUUM_ONLY_DPS154 = {
+    "FAoKCgASABoAIgIIAhIGCAEQASAB",
 }
 
 
@@ -116,62 +105,64 @@ class CleaningModeSelect(CoordinatorEntity, RestoreEntity, SelectEntity):
         """Return the currently selected option."""
         if not self.coordinator.data:
             return self._restored_option
-        
+
         dps154 = self.coordinator.data.get("154", "")
-        dps10 = self.coordinator.data.get("10", None)
-        
-        # Check if DPS 10 is a string (water level)
-        if isinstance(dps10, str) and dps10 in ["low", "middle", "high"]:
-            water_level = dps10
-        else:
-            water_level = None
-        
-        # Try to find matching mode
-        mode_key = (dps154, water_level)
-        if mode_key in DPS_TO_MODE_MAP:
-            mode = DPS_TO_MODE_MAP[mode_key]
-            if mode in CLEANING_MODES:
-                return CLEANING_MODES[mode]["name"]
-        
-        # Try without water level (vacuum mode)
-        if dps154 == CLEANING_MODES["vacuum"]["dps154"]:
+
+        if dps154 in _VACUUM_ONLY_DPS154:
             return CLEANING_MODES["vacuum"]["name"]
 
-        # DPS 154 value doesn't match any known pattern — use restored or default
+        # Any mop-related DPS 154 value → "Vacuum and Mop"
+        dps10 = self.coordinator.data.get("10")
+        if isinstance(dps10, str) and dps10 in ("low", "middle", "high"):
+            return CLEANING_MODES["vacuum_and_mop"]["name"]
+
+        # Fallback
         return self._restored_option or CLEANING_MODES["vacuum"]["name"]
 
     async def async_select_option(self, option: str) -> None:
         """Change the selected option."""
-        # Find the mode by name
         selected_mode = None
         for mode_key, mode_config in CLEANING_MODES.items():
             if mode_config["name"] == option:
                 selected_mode = mode_key
                 break
-        
+
         if not selected_mode:
-            logger.error(f"Invalid cleaning mode selected: {option}")
+            logger.error("Invalid cleaning mode selected: %s", option)
             return
-        
+
         mode_config = CLEANING_MODES[selected_mode]
-        logger.info(f"Setting cleaning mode to: {mode_config['name']}")
-        
+        logger.info("Setting cleaning mode to: %s", mode_config["name"])
+
         try:
-            # Set DPS 154
-            await self.coordinator.tuya_client.async_set({"154": mode_config["dps154"]})
+            if selected_mode == "vacuum_and_mop":
+                # When switching to mop mode, respect the current Mop Intensity
+                # setting if one exists, otherwise use the default (medium)
+                current_water = self.coordinator.data.get("10") if self.coordinator.data else None
+                if isinstance(current_water, str) and current_water in ("low", "middle", "high"):
+                    water_to_dps154 = {
+                        "low": "FAoKCgIIAhIAGgAiABIGCAEQASAB",
+                        "middle": "FgoMCgIIAhIAGgAiAggBEgYIARABIAE=",
+                        "high": "FgoMCgIIAhIAGgAiAggCEgYIARABIAE=",
+                    }
+                    dps154 = water_to_dps154[current_water]
+                else:
+                    dps154 = mode_config["dps154"]
+                    current_water = mode_config["dps10"]
+
+                await self.coordinator.tuya_client.async_set({"154": dps154})
+                await asyncio.sleep(0.3)
+                if current_water:
+                    await self.coordinator.tuya_client.async_set({"10": current_water})
+            else:
+                # Vacuum only
+                await self.coordinator.tuya_client.async_set({"154": mode_config["dps154"]})
+
             await asyncio.sleep(0.5)
-            
-            # Set DPS 10 if needed (for mopping modes)
-            if mode_config["dps10"]:
-                await self.coordinator.tuya_client.async_set({"10": mode_config["dps10"]})
-            await asyncio.sleep(0.5)
-            
-            # Refresh state
             await self.coordinator.async_request_refresh()
-            
-            logger.info(f"Cleaning mode set to: {mode_config['name']}")
+            logger.info("Cleaning mode set to: %s", mode_config["name"])
         except Exception as e:
-            logger.error(f"Failed to set cleaning mode: {e}")
+            logger.error("Failed to set cleaning mode: %s", e)
 
 
 # ─── Suction Level (fan speed as standalone select for Matter Hub) ────────────
@@ -305,28 +296,26 @@ class MopIntensitySelect(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, 
 
         logger.info("Setting mop intensity to: %s", option)
 
+        # DPS 154 protobuf values for each water level
+        _WATER_DPS154 = {
+            "low": "FAoKCgIIAhIAGgAiABIGCAEQASAB",
+            "middle": "FgoMCgIIAhIAGgAiAggBEgYIARABIAE=",
+            "high": "FgoMCgIIAhIAGgAiAggCEgYIARABIAE=",
+        }
+
         try:
             if option == "Off":
                 # Switch to vacuum-only mode
-                vacuum_cfg = CLEANING_MODES["vacuum"]
                 await self.coordinator.tuya_client.async_set({
-                    "154": vacuum_cfg["dps154"],
+                    "154": CLEANING_MODES["vacuum"]["dps154"],
                 })
             else:
-                # Find the matching mop cleaning mode
                 water_val = WATER_LEVELS[option]
-                # Map water level to the corresponding cleaning mode key
-                water_to_mode = {"low": "mop_low", "middle": "mop_middle", "high": "mop_high"}
-                mode_key = water_to_mode.get(water_val)
-                if mode_key and mode_key in CLEANING_MODES:
-                    mode_cfg = CLEANING_MODES[mode_key]
-                    await self.coordinator.tuya_client.async_set({
-                        "154": mode_cfg["dps154"],
-                    })
+                dps154 = _WATER_DPS154.get(water_val)
+                if dps154:
+                    await self.coordinator.tuya_client.async_set({"154": dps154})
                     await asyncio.sleep(0.3)
-                    await self.coordinator.tuya_client.async_set({
-                        "10": water_val,
-                    })
+                    await self.coordinator.tuya_client.async_set({"10": water_val})
 
             await asyncio.sleep(0.5)
             await self.coordinator.async_request_refresh()
