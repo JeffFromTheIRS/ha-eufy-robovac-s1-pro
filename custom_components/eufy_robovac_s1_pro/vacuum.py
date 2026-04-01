@@ -16,6 +16,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CONF_COORDINATOR, CONF_DISCOVERED_DEVICES, DOMAIN
+from .protobuf_parser import decode_message, strip_length_prefix, get_varint, get_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -130,8 +131,18 @@ def decode_dps153_to_state(dps153_value: str) -> tuple[RobovacState, str]:
             substatus = _get_docked_substatus(decoded)
             return RobovacState.DOCKED, substatus
 
-        # Byte[1]=0x0a with other Byte[2] values (e.g. 0x02) — docked/idle variant
+        # Byte[1]=0x0a with other Byte[2] values — use protobuf parsing
+        # to distinguish active states from idle/docked.
+        #
+        # DPS 153 protobuf structure:
+        #   Field 1 (LEN): sub-message (often contains field 1 = some status int)
+        #   Field 2 (varint): mode — 3=charging, 5=vacuum, 7=returning, 9=mop ops
+        #   Field 6 (LEN): completion flag — non-empty {1:1} = idle, empty = active
         if byte1 == 0x0a:
+            state, substatus = _decode_dps153_protobuf(decoded)
+            if state is not None:
+                return state, substatus
+            # Fallback if protobuf parsing didn't yield a clear answer
             substatus = _get_docked_substatus(decoded)
             return RobovacState.DOCKED, substatus or "idle"
 
@@ -142,6 +153,73 @@ def decode_dps153_to_state(dps153_value: str) -> tuple[RobovacState, str]:
     except Exception as e:
         logger.error(f"Error decoding dps153: {e}", exc_info=True)
         return RobovacState.UNKNOWN, "error"
+
+
+def _decode_dps153_protobuf(decoded: bytes) -> tuple[RobovacState | None, str]:
+    """Parse DPS 153 as a length-prefixed protobuf to determine state.
+
+    The first byte is a varint length prefix. After stripping it, the message
+    contains:
+      Field 1 (LEN): sub-message — empty when actively cleaning, contains
+        {1:1} when idle/docked in vacuum mode context
+      Field 2 (varint): mode type
+        3 = charging/docked
+        5 = vacuum/sweep mode
+        7 = returning to dock
+        9 = mop/station operations
+      Field 6 (LEN): completion/idle flag — when non-empty (contains {1:1})
+        the vacuum is idle at dock; when empty or absent the vacuum is
+        actively moving (cleaning, navigating to a room, etc.)
+
+    Observed patterns:
+      mode=5, field1=empty,  field6=absent → actively cleaning
+      mode=5, field1={1:1},  field6=empty  → navigating to room / cleaning
+      mode=5, field1={1:1},  field6={1:1}  → idle at dock (vacuum mode context)
+
+    Returns (state, substatus) or (None, "") if parsing is inconclusive.
+    """
+    try:
+        data = strip_length_prefix(decoded)
+        fields = decode_message(data)
+
+        mode = get_varint(fields, 2)
+        field6_bytes = get_bytes(fields, 6)
+        field6_has_content = field6_bytes is not None and len(field6_bytes) > 0
+
+        logger.debug(
+            "DPS 153 protobuf: mode=%d, field6_has_content=%s, field6=%s",
+            mode,
+            field6_has_content,
+            field6_bytes.hex() if field6_bytes else "none",
+        )
+
+        if mode == 5:
+            # Vacuum/sweep mode
+            # Field 6 non-empty (e.g. {1:1}) = idle/done at dock
+            # Field 6 empty or absent = actively cleaning or navigating
+            if field6_has_content:
+                return RobovacState.DOCKED, "idle"
+            return RobovacState.CLEANING, "cleaning"
+
+        if mode == 7:
+            return RobovacState.RETURNING, "returning"
+
+        if mode == 3:
+            # Charging / docked
+            return RobovacState.DOCKED, "charging"
+
+        if mode == 9:
+            # Mop/station operations — still docked
+            return RobovacState.DOCKED, "mop_operations"
+
+        # Unknown mode — if field 6 is empty, lean toward active
+        if not field6_has_content:
+            return RobovacState.CLEANING, "cleaning"
+
+    except Exception as e:
+        logger.debug("Failed to parse DPS 153 as protobuf: %s", e)
+
+    return None, ""
 
 
 def _get_docked_substatus(decoded: bytes) -> str:

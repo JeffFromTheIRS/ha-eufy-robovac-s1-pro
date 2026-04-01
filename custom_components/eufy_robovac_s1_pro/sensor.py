@@ -6,7 +6,10 @@ Sensors are organized by data source:
 - Cleaning Statistics: DPS 167 (protobuf — last clean, totals)
 - Consumable Life: DPS 168 (protobuf — usage counters)
 - Room Definitions: DPS 164 (protobuf — diagnostic only)
+- Raw DPS: DPS 116/117/121/140 (room/map exploration — format unknown)
 """
+
+import base64
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
@@ -71,6 +74,23 @@ async def async_setup_entry(
 
         # DPS 164: Room definitions (diagnostic — decode and display)
         devices.append(RoomDefinitionsSensor(coordinator=coordinator))
+
+        # Raw DPS diagnostic sensors for room/map data exploration
+        # These DPS keys may only appear when room cleaning is triggered
+        # from the Eufy app. Capturing them helps decode the data format.
+        raw_dps_sensors = [
+            ("140", "Smart Rooms Data", "mdi:floor-plan"),
+            ("116", "Area Clean Data", "mdi:selection-ellipse"),
+            ("117", "Area Clean Active", "mdi:play-circle-outline"),
+            ("121", "Map Data", "mdi:map"),
+        ]
+        for dps_id, name, icon in raw_dps_sensors:
+            devices.append(RawDPSDiagnosticSensor(
+                coordinator=coordinator,
+                dps_id=dps_id,
+                name=name,
+                icon=icon,
+            ))
 
     if devices:
         return async_add_devices(devices)
@@ -435,3 +455,62 @@ class RoomDefinitionsSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntit
             })
 
         return {"rooms": room_list}
+
+
+# ─── Raw DPS Diagnostic Sensors (room/map exploration) ──────────────────────
+
+
+class RawDPSDiagnosticSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, RestoreEntity, SensorEntity):
+    """Diagnostic sensor that exposes a raw DPS value as a string.
+
+    Used to capture DPS keys whose data format is unknown (e.g. room/map
+    data). The raw value is shown as the sensor state, and if it looks like
+    base64 the decoded hex is exposed in extra_state_attributes for analysis.
+    """
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator, dps_id: str, name: str, icon: str):
+        self._dps_id = dps_id
+        self._attr_name = name
+        self._attr_icon = icon
+        self._restored_value = None
+        super().__init__(coordinator=coordinator)
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state and last_state.state not in (None, "unknown", "unavailable"):
+            self._restored_value = last_state.state
+
+    @property
+    def available(self) -> bool:
+        has_live = self.coordinator.data is not None and self._dps_id in self.coordinator.data
+        return has_live or self._restored_value is not None
+
+    @property
+    def native_value(self) -> str | None:
+        if self.coordinator.data and self._dps_id in self.coordinator.data:
+            value = self.coordinator.data[self._dps_id]
+            self._restored_value = str(value)
+            return str(value)
+        return self._restored_value
+
+    @property
+    def extra_state_attributes(self) -> dict | None:
+        """If the value looks like base64, expose decoded hex for analysis."""
+        raw = (self.coordinator.data or {}).get(self._dps_id)
+        if raw is None:
+            return None
+
+        attrs: dict = {"dps_key": self._dps_id}
+
+        if isinstance(raw, str) and len(raw) >= 4:
+            try:
+                decoded = base64.b64decode(raw)
+                attrs["base64_decoded_hex"] = " ".join(f"{b:02x}" for b in decoded)
+                attrs["base64_decoded_length"] = len(decoded)
+            except Exception:
+                pass
+
+        return attrs
