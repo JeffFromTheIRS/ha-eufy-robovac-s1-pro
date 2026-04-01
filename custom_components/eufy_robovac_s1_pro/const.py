@@ -17,10 +17,11 @@ try:
         Platform.SWITCH,
         Platform.NUMBER,
         Platform.SELECT,
+        Platform.TEXT,
     ]
 except ImportError:
     # Fallback if Platform enum is not available
-    PLATFORMS = ["vacuum", "button", "sensor", "switch", "number", "select"]
+    PLATFORMS = ["vacuum", "button", "sensor", "switch", "number", "select", "text"]
 
 DOMAIN = "eufy_robovac_s1_pro"
 

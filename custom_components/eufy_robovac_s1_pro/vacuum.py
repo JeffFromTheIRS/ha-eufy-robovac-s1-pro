@@ -11,12 +11,12 @@ from homeassistant.components.vacuum import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CONF_COORDINATOR, CONF_DISCOVERED_DEVICES, DOMAIN
+from .protobuf_parser import decode_message, strip_length_prefix, get_varint, get_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -130,14 +130,96 @@ def decode_dps153_to_state(dps153_value: str) -> tuple[RobovacState, str]:
         if byte1 == 0x10:
             substatus = _get_docked_substatus(decoded)
             return RobovacState.DOCKED, substatus
-        
+
+        # Byte[1]=0x0a with other Byte[2] values — use protobuf parsing
+        # to distinguish active states from idle/docked.
+        #
+        # DPS 153 protobuf structure:
+        #   Field 1 (LEN): sub-message (often contains field 1 = some status int)
+        #   Field 2 (varint): mode — 3=charging, 5=vacuum, 7=returning, 9=mop ops
+        #   Field 6 (LEN): completion flag — non-empty {1:1} = idle, empty = active
+        if byte1 == 0x0a:
+            state, substatus = _decode_dps153_protobuf(decoded)
+            if state is not None:
+                return state, substatus
+            # Fallback if protobuf parsing didn't yield a clear answer
+            substatus = _get_docked_substatus(decoded)
+            return RobovacState.DOCKED, substatus or "idle"
+
         # デフォルトはDocked (未知のパターンでも安全側に倒す)
-        logger.warning(f"Unknown dps153 pattern, defaulting to DOCKED: {hex_str}")
+        logger.debug(f"Unknown dps153 pattern, defaulting to DOCKED: {hex_str}")
         return RobovacState.DOCKED, "idle"
         
     except Exception as e:
         logger.error(f"Error decoding dps153: {e}", exc_info=True)
         return RobovacState.UNKNOWN, "error"
+
+
+def _decode_dps153_protobuf(decoded: bytes) -> tuple[RobovacState | None, str]:
+    """Parse DPS 153 as a length-prefixed protobuf to determine state.
+
+    The first byte is a varint length prefix. After stripping it, the message
+    contains:
+      Field 1 (LEN): sub-message — empty when actively cleaning, contains
+        {1:1} when idle/docked in vacuum mode context
+      Field 2 (varint): mode type
+        3 = charging/docked
+        5 = vacuum/sweep mode
+        7 = returning to dock
+        9 = mop/station operations
+      Field 6 (LEN): completion/idle flag — when non-empty (contains {1:1})
+        the vacuum is idle at dock; when empty or absent the vacuum is
+        actively moving (cleaning, navigating to a room, etc.)
+
+    Observed patterns:
+      mode=5, field1=empty,  field6=absent → actively cleaning
+      mode=5, field1={1:1},  field6=empty  → navigating to room / cleaning
+      mode=5, field1={1:1},  field6={1:1}  → idle at dock (vacuum mode context)
+
+    Returns (state, substatus) or (None, "") if parsing is inconclusive.
+    """
+    try:
+        data = strip_length_prefix(decoded)
+        fields = decode_message(data)
+
+        mode = get_varint(fields, 2)
+        field6_bytes = get_bytes(fields, 6)
+        field6_has_content = field6_bytes is not None and len(field6_bytes) > 0
+
+        logger.debug(
+            "DPS 153 protobuf: mode=%d, field6_has_content=%s, field6=%s",
+            mode,
+            field6_has_content,
+            field6_bytes.hex() if field6_bytes else "none",
+        )
+
+        if mode == 5:
+            # Vacuum/sweep mode
+            # Field 6 non-empty (e.g. {1:1}) = idle/done at dock
+            # Field 6 empty or absent = actively cleaning or navigating
+            if field6_has_content:
+                return RobovacState.DOCKED, "idle"
+            return RobovacState.CLEANING, "cleaning"
+
+        if mode == 7:
+            return RobovacState.RETURNING, "returning"
+
+        if mode == 3:
+            # Charging / docked
+            return RobovacState.DOCKED, "charging"
+
+        if mode == 9:
+            # Mop/station operations — still docked
+            return RobovacState.DOCKED, "mop_operations"
+
+        # Unknown mode — if field 6 is empty, lean toward active
+        if not field6_has_content:
+            return RobovacState.CLEANING, "cleaning"
+
+    except Exception as e:
+        logger.debug("Failed to parse DPS 153 as protobuf: %s", e)
+
+    return None, ""
 
 
 def _get_docked_substatus(decoded: bytes) -> str:
@@ -254,15 +336,12 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        info = DeviceInfo(
+        return DeviceInfo(
             identifiers={(DOMAIN, self.unique_id)},
             manufacturer="Eufy",
             name=self.name,
             model="S1 Pro (T2080)",
         )
-        if mac := self.coordinator.mac:
-            info["connections"] = {(CONNECTION_NETWORK_MAC, mac)}
-        return info
 
     @property
     def unique_id(self) -> str:
@@ -279,13 +358,7 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
         dps153 = self.coordinator.data.get("153", "")  # Actual status indicator (most reliable)
         
         logger.debug(f"Activity check - DPS 6: {dps6}, DPS 153: {dps153}")
-        
-        # Error detection
-        if isinstance(dps6, int) and dps6 >= 100:
-            self._detected_state = RobovacState.ERROR
-            self._substatus = "error"
-            return VacuumActivity.ERROR
-        
+
         # Check DPS 153 status using improved pattern-based detection
         if dps153:
             detected_state, substatus = decode_dps153_to_state(dps153)
@@ -350,7 +423,13 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
             else:
                 return VacuumActivity.IDLE
         
-        # デフォルト
+        # Battery-based DOCKED detection as last resort
+        battery = self.coordinator.data.get("8") or self.coordinator.data.get("163", 0)
+        try:
+            if int(battery) >= 95:
+                return VacuumActivity.DOCKED
+        except (ValueError, TypeError):
+            pass
         return VacuumActivity.IDLE
 
     @property
@@ -382,15 +461,12 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
     def state_attributes(self) -> dict[str, Any]:
         """Return the state attributes of the vacuum."""
         attrs = super().state_attributes or {}
-
+        
         if self.coordinator.data:
             # Only include essential attributes for end users
             if error_code := self.error_code:
                 attrs["error_code"] = error_code
-            if self._substatus:
-                attrs["status"] = self._substatus
-                attrs["is_charging"] = self._substatus in ("charging", "fully_charged")
-
+            
         return attrs
     
     def _is_running(self) -> bool:
@@ -417,11 +493,10 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
 
     @property
     def error_code(self) -> str | None:
-        """Return error code if any."""
+        """Return error code from DPS 106 if any."""
         if self.coordinator.data:
-            # Check if DPS 6 has an error value (high numbers)
-            error_code = self.coordinator.data.get("6")
-            if isinstance(error_code, int) and error_code >= 100:
+            error_code = self.coordinator.data.get("106")
+            if error_code is not None and str(error_code) not in ("0", "no_error", ""):
                 return str(error_code)
         return None
 
@@ -586,9 +661,11 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
         # Do nothing, but don't raise an error for compatibility
 
     async def async_locate(self, **kwargs: Any) -> None:
-        """Locate the vacuum (make it beep) - Not supported on S1 Pro."""
-        logger.info("Locate function is not supported on S1 Pro - ignoring request")
-        # Do nothing, but don't raise an error for compatibility
+        """Locate the vacuum by triggering DPS 103."""
+        try:
+            await self.coordinator.tuya_client.async_set({"103": True})
+        except Exception as e:
+            logger.error(f"Failed to locate vacuum: {e}")
 
     async def async_set_fan_speed(self, fan_speed: str, **kwargs: Any) -> None:
         """Set the vacuum's fan speed."""

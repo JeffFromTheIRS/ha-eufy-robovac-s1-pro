@@ -1,0 +1,24 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Eufy Account Login",
+        "data": {
+          "username": "Email",
+          "password": "Password"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Room Names",
+        "description": "Set custom names for each room. Leave as default to use auto-detected names."
+      }
+    },
+    "abort": {
+      "no_rooms": "No rooms found. Make sure the vacuum is online and has mapped your home in the Eufy app."
+    }
+  }
+}
