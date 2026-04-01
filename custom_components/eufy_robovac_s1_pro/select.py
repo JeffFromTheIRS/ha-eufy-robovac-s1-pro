@@ -1,6 +1,6 @@
 """Select platform for Eufy Robovac."""
+import base64
 import logging
-from typing import Any
 import asyncio
 
 from homeassistant.components.select import SelectEntity
@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CONF_COORDINATOR, CONF_DISCOVERED_DEVICES, DOMAIN
 from .mixins import CoordinatorTuyaDeviceUniqueIDMixin
+from .protobuf_parser import decode_message, get_bytes, strip_length_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +33,25 @@ CLEANING_MODES = {
     },
 }
 
-# All known DPS 154 vacuum-only values → "vacuum", everything else → "vacuum_and_mop"
-_VACUUM_ONLY_DPS154 = {
-    "FAoKCgASABoAIgIIAhIGCAEQASAB",
-}
+def _is_vacuum_only_mode(dps154: str) -> bool:
+    """Check if DPS 154 protobuf represents vacuum-only mode (no mop).
+
+    DPS 154 encodes both cleaning mode and suction level as a protobuf.
+    Field 1 is a sub-message whose field 1 holds mop config bytes.
+    If the mop config is empty or absent, the vacuum is in vacuum-only mode.
+    """
+    try:
+        raw = base64.b64decode(dps154)
+        data = strip_length_prefix(raw)
+        fields = decode_message(data)
+        f1_bytes = get_bytes(fields, 1)
+        if f1_bytes is None:
+            return True
+        f1_fields = decode_message(f1_bytes)
+        mop_config = get_bytes(f1_fields, 1)
+        return mop_config is None or len(mop_config) == 0
+    except Exception:
+        return True
 
 
 async def async_setup_entry(
@@ -68,6 +84,9 @@ class CleaningModeSelect(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, 
     def __init__(self, coordinator):
         """Initialize the select entity."""
         self._restored_option = None
+        # Override unique_id to use underscore format for backwards compatibility
+        # with entities created before the mixin switch (which uses dashes).
+        self._attr_unique_id = f"{coordinator.tuya_client.device_id}_cleaning_mode"
         super().__init__(coordinator=coordinator)
 
     async def async_added_to_hass(self) -> None:
@@ -87,22 +106,15 @@ class CleaningModeSelect(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, 
 
     @property
     def current_option(self) -> str | None:
-        """Return the currently selected option."""
+        """Return the currently selected option based on DPS 154 protobuf parsing."""
         if not self.coordinator.data:
             return self._restored_option
 
         dps154 = self.coordinator.data.get("154", "")
-
-        if dps154 in _VACUUM_ONLY_DPS154:
-            return CLEANING_MODES["vacuum"]["name"]
-
-        # Any mop-related DPS 154 value → "Vacuum and Mop"
-        dps10 = self.coordinator.data.get("10")
-        if isinstance(dps10, str) and dps10 in ("low", "middle", "high"):
+        if dps154 and not _is_vacuum_only_mode(dps154):
             return CLEANING_MODES["vacuum_and_mop"]["name"]
 
-        # Fallback
-        return self._restored_option or CLEANING_MODES["vacuum"]["name"]
+        return CLEANING_MODES["vacuum"]["name"]
 
     async def async_select_option(self, option: str) -> None:
         """Change the selected option."""
@@ -142,6 +154,21 @@ class CleaningModeSelect(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, 
             else:
                 # Vacuum only
                 await self.coordinator.tuya_client.async_set({"154": mode_config["dps154"]})
+
+            await asyncio.sleep(0.3)
+
+            # Re-send current suction level so the hardcoded DPS 154 values
+            # (which embed suction=Standard) don't override the user's setting.
+            if self.coordinator.data:
+                for dps_key in ("9", "158"):
+                    raw = self.coordinator.data.get(dps_key)
+                    if raw and raw in _SUCTION_REVERSE:
+                        dps9_val, dps158_val = SUCTION_LEVELS[_SUCTION_REVERSE[raw]]
+                        await self.coordinator.tuya_client.async_set({
+                            "9": dps9_val,
+                            "158": dps158_val,
+                        })
+                        break
 
             await asyncio.sleep(0.5)
             await self.coordinator.async_request_refresh()
@@ -269,7 +296,7 @@ class MopIntensitySelect(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, 
 
             # If DPS 10 is absent/unset, check if we're in vacuum-only mode
             dps154 = self.coordinator.data.get("154", "")
-            if dps154 == CLEANING_MODES.get("vacuum", {}).get("dps154"):
+            if dps154 and _is_vacuum_only_mode(dps154):
                 return "Off"
 
         return self._restored_option or "Off"
