@@ -99,6 +99,7 @@ class EufyCleanClient:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._connected_event = asyncio.Event()
         self.last_connect_rc: int | None = None  # CONNACK code from _on_connect
+        self.granted_qos: list | None = None  # SUBACK codes (128 == denied)
 
     def is_connected(self) -> bool:
         return bool(self._mqtt_client and self._mqtt_client.is_connected())
@@ -192,6 +193,7 @@ class EufyCleanClient:
         self._mqtt_client.on_connect = self._on_connect
         self._mqtt_client.on_message = self._on_message
         self._mqtt_client.on_disconnect = self._on_disconnect
+        self._mqtt_client.on_subscribe = self._on_subscribe
 
         # Async connect
         _LOGGER.debug("Connecting to MQTT broker at %s...", self.endpoint)
@@ -241,6 +243,11 @@ class EufyCleanClient:
                 client.subscribe(biz_topic)
         else:
             _LOGGER.error("Failed to connect to MQTT, return code %d", rc)
+
+    def _on_subscribe(self, client, userdata, mid, granted_qos):
+        # granted_qos entries of 128 (0x80) mean AWS IoT DENIED the subscription.
+        self.granted_qos = [int(q) for q in granted_qos]
+        _LOGGER.debug("SUBACK granted_qos=%s", self.granted_qos)
 
     def _on_disconnect(self, client, userdata, rc):
         if rc == 0:

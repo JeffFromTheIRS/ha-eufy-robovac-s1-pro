@@ -60,10 +60,23 @@ class EufyCloudSession:
 
     def status(self) -> dict[str, Any]:
         """Diagnostic snapshot of the cloud link (for the room-select entity)."""
+        c = self._client
+
+        def _mask(v: str | None) -> str | None:
+            if not v:
+                return v
+            return v[:4] + "…" + v[-4:] if len(v) > 10 else v
+
         return {
-            "cloud_connected": bool(self._client),
-            "mqtt_is_connected": self._client.is_connected() if self._client else False,
-            "mqtt_last_rc": self._client.last_connect_rc if self._client else None,
+            "cloud_connected": bool(c),
+            "mqtt_is_connected": c.is_connected() if c else False,
+            "mqtt_last_rc": c.last_connect_rc if c else None,
+            "mqtt_granted_qos": c.granted_qos if c else None,
+            "client_id": _mask(getattr(c, "_client_id", None)) if c else None,
+            "app_name": getattr(c, "app_name", None) if c else None,
+            "user_id": _mask(getattr(c, "user_id", None)) if c else None,
+            "thing_name": _mask(getattr(c, "thing_name", None)) if c else None,
+            "endpoint": getattr(c, "endpoint", None) if c else None,
             "bound_device_id": self.device_id,
             "bound_device_model": self.device_model,
             "mqtt_messages_received": self.msg_count,
