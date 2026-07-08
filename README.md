@@ -1,4 +1,4 @@
-# [Eufy RoboVac S1 Pro - Home Assistant Integration](https://github.com/tkoba1974/ha-eufy-robovac-s1-pro)
+# [Eufy RoboVac S1 Pro - Home Assistant Integration]([https://github.com/tkoba1974/ha-eufy-robovac-s1-pro](https://github.com/JeffFromTheIRS/ha-eufy-robovac-s1-pro])
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 
@@ -6,8 +6,11 @@
 
 This custom integration enables control of the Eufy RoboVac S1 Pro through Home Assistant.
 
+It is designed for **local-only operation**: after the initial setup (which requires a one-time login to the Eufy account to fetch the device's local encryption key), all ongoing communication between Home Assistant and the vacuum happens directly over your LAN. The integration keeps working even when the Eufy or Tuya cloud is unreachable, as long as Home Assistant and the vacuum are on the same network.
+
 ## Features
 
+- 🔒 Local-only control after initial setup — no cloud dependency for day-to-day operation
 - 🤖 Start/Pause/Resume cleaning
 - 🏠 Return to dock
 - 🔋 Battery level monitoring
@@ -74,7 +77,8 @@ You'll need the following information during setup:
 ### Sensors
 - Battery level
 - Running status
-- Cleaning statistics (Total Cleaning Area, Total Cleaning Count)
+- Cleaning statistics (Total Cleaning Area, Total Cleaning Count, Total Cleaning Time)
+- Consumable remaining % (Side Brush, Rolling Brush, High-Performance Filter, Sensors, Rolling Mop, Dirty Water Tank Filter, Mop Cleaning Tray, Dirty Water Tank) — display only; reset must be done from the Eufy app
 
 ### Select
 - Cleaning mode and water level selection
@@ -97,6 +101,18 @@ You'll need the following information during setup:
 2. Check if the device is online in the Eufy app
 3. Check Home Assistant logs for details
 
+## Known Limitations
+
+### Room-specific cleaning is not supported (and not planned)
+
+Selecting individual rooms to clean from Home Assistant is **not implementable** through this integration's local-only design, and there are no plans to add it. Investigation on FW 7.0.168 confirmed that the Eufy mobile app sends room-selection commands to the device via the Tuya cloud / Eufy's encrypted P2P channel, and the room IDs / map data never travel over the local LAN. The same constraint applies broadly to other Home Assistant integrations targeting this model, so no realistic workaround is expected. See the [`feature/room-cleaning`](https://github.com/tkoba1974/ha-eufy-robovac-s1-pro/tree/feature/room-cleaning) branch for the full investigation log.
+
+### Maintenance/consumable reset is not supported
+
+Resetting consumables (side brush, rolling brush, filter, etc.) from Home Assistant is **not currently supported** — reset must be done from the Eufy app. The remaining-% values themselves *are* exposed as sensors (see Supported Entities → Sensors); only the reset action is missing.
+
+The reset is technically reachable: per the Eufy/Tuya cloud `consumable.proto` (referenced in [jeppesens/eufy-clean#126](https://github.com/jeppesens/eufy-clean/pull/126)), the reset is a write of a `ConsumableRequest { reset_types: [<enum>] }` protobuf to **DPS 168** (the same DPS we read for status). It is not implemented here because verification would require destructively zeroing a real consumable counter, and no public confirmation exists that the legacy / local-Tuya path on the S1 Pro accepts the reset write — the reference implementation in jeppesens/eufy-clean explicitly skips reset buttons for legacy/Tuya devices.
+
 ## Contributing
 
 Please report bugs and feature requests via [Issues](https://github.com/tkoba1974/ha-eufy-robovac-s1-pro/issues).
@@ -104,6 +120,20 @@ Please report bugs and feature requests via [Issues](https://github.com/tkoba197
 Pull requests are welcome!
 
 ## Changelog
+
+### v1.0.5
+- **Add: Consumable remaining-% sensors (8 components)** — Side Brush, Rolling Brush, High-Performance Filter, Sensors, Rolling Mop, Dirty Water Tank Filter, Mop Cleaning Tray, Dirty Water Tank. Values match the Eufy app's "Maintenance" screen within rounding. Decoded from DPS 168 (`ConsumableResponse` protobuf — `runtime` submessage with one `Duration` per component, single varint at field 22 in minutes). Per-component lifetime ceilings are hard-coded from the Eufy app's display.
+- **Docs: Revise Known Limitations** — Removed the prior "maintenance status is not exposed" note: consumable values *are* available locally; only the reset command isn't.
+
+#### Investigation note
+The v1.0.4 conclusion that consumable status was unavailable was a misread of DPS 168. A Phase 0 note had described it as "per-room counters with field 22"; field 22 is actually the `Duration.duration` field *inside* each per-component `Item` submessage. Cross-referencing the `ConsumableResponse` definition from [jeppesens/eufy-clean#126](https://github.com/jeppesens/eufy-clean/pull/126) and walking the actual bytes confirmed all eight S1 Pro values match the Eufy app exactly. S1 Pro renumbers `dirty_watertank` (field 10 → 41) and `scrape` (field 4 → 43); other field tags match the cloud `.proto`. The 41↔43 assignment was confirmed by resetting the mop cleaning tray in the Eufy app and watching field 43 collapse to an empty Item submessage in the next DPS 168 dump (the parser treats an empty Item as `usage=0` so a freshly-reset component shows 100% remaining).
+
+### v1.0.4
+- **Add: Total Cleaning Time sensor** — New diagnostic sensor exposing cumulative cleaning time in minutes (matches the "合計時間 / Total Time" value shown in the Eufy app's cleaning history). Value persists across restarts via `RestoreEntity`.
+- **Fix: DPS 167 statistics parser robustness** — Replaced fixed byte-position parsing with a proper protobuf walker so Total Cleaning Area continues to decode correctly when the cumulative value crosses 2-byte varint boundaries.
+- **Docs: Known Limitations expanded with feature-scope decisions** — The README's "Known Limitations" section now explicitly documents two feature areas that are *not implementable* under this integration's local-LAN-only design (verified empirically on FW 7.0.168):
+  - **Room-specific cleaning, floor-plan switching, map management** — first added to the README between v1.0.3 and v1.0.4 but not surfaced in any prior release notes; called out here so users tracking releases can see the decision. The Eufy app sends room/map commands via the Tuya cloud / Eufy's encrypted P2P channel, which this integration cannot observe or replay.
+  - **Maintenance/consumable status (8 items)** — newly verified on 2026-05-02. None of the per-component remaining-lifetime values shown on the Eufy app's "Maintenance" screen (rotating mop, dirty water tank, mop cleaning tray, high-performance filter, side brush, rotating brush, sensors, dirty water tank filter) are published over the local Tuya channel. Resetting consumables from Home Assistant is also not supported; reset must be done from the Eufy app.
 
 ### v1.0.3
 - **Fix: Eufy API login failure** — Updated login headers (`User-Agent`, `clientType`, `client_secret` key name) to match the latest Eufy Home app (v3.1.3). Added v1/v2 endpoint fallback to handle potential future API endpoint deprecation.
