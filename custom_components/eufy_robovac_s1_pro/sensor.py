@@ -55,13 +55,20 @@ async def async_setup_entry(
         devices.append(LastCleanTimeSensor(coordinator=coordinator))
         devices.append(LastCleanAreaSensor(coordinator=coordinator))
 
-        # DPS 168: Consumable life sensors (protobuf)
+        # DPS 168: Consumable life sensors (protobuf).
+        # (field_id, key, display name, icon) — field IDs match
+        # CONSUMABLE_FIELD_MAP in protobuf_parser. The first five names are kept
+        # verbatim so their entity IDs (derived from the name) stay stable;
+        # fields 11/41/43 are the S1 Pro's water-tank / mop-tray components.
         consumables = [
             (1, "side_brush", "Side Brush Life", "mdi:broom"),
             (2, "main_brush", "Main Brush Life", "mdi:broom"),
             (3, "filter", "Filter Life", "mdi:air-filter"),
             (5, "sensor", "Sensor Life", "mdi:leak"),
             (6, "mop_pad", "Mop Pad Life", "mdi:spray-bottle"),
+            (11, "dirty_water_filter", "Dirty Water Filter Life", "mdi:filter-variant"),
+            (41, "dirty_water_tank", "Dirty Water Tank Life", "mdi:water-pump"),
+            (43, "mop_tray", "Mop Cleaning Tray Life", "mdi:tray"),
         ]
         for field_id, consumable_key, display_name, icon in consumables:
             devices.append(ConsumableLifeProtobufSensor(

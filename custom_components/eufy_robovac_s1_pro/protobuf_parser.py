@@ -178,34 +178,34 @@ def parse_dps167(b64_value: str) -> CleaningStatistics | None:
 # ─── DPS 168: Consumable Usage Counters ───────────────────────────────────────
 
 
-# Map protobuf field numbers to consumable names
+# Map protobuf field numbers to consumable names. Field numbers follow the
+# Eufy/Tuya cloud ConsumableResponse .proto (components 1-7, 10, 11), except
+# the S1 Pro renumbers dirty_watertank 10 -> 41 and scrape 4 -> 43 (verified
+# empirically against pre/post-reset DPS 168 dumps).
 CONSUMABLE_FIELD_MAP: dict[int, str] = {
     1: "side_brush",
-    2: "main_brush",
-    3: "filter",
+    2: "rolling_brush",
+    3: "filter_mesh",
     5: "sensor",
-    6: "mop_pad",
-    11: "mop_pad_alt",
-    41: "other_1",
-    43: "other_2",
+    6: "mop",
+    11: "dirty_waterfilter",
+    41: "dirty_watertank",
+    43: "scrape",
 }
 
-# Rated maximum usage values for calculating remaining life %.
-# These are in the same unit as the raw counter from DPS 168.
-# Based on typical Eufy S1 Pro consumable lifetimes, assuming counters are in minutes:
-#   Side brush: ~200 hours = 12,000 min
-#   Main brush: ~300 hours = 18,000 min
-#   Filter: ~200 hours = 12,000 min
-#   Sensor: ~300 hours = 18,000 min
-#   Mop pad: ~100 uses (different metric — may not apply)
-# NOTE: These are estimates and may need tuning based on real-world data.
+# Rated maximum lifetime per consumable, in minutes (hours × 60). DPS 168
+# carries the cumulative usage (field 22, in minutes) but NOT the maximum, so
+# the max is hard-coded here from the Eufy app's Maintenance screen. Values
+# verified empirically by upstream (tkoba1974) against pre/post-reset dumps.
 CONSUMABLE_MAX_VALUES: dict[str, int] = {
-    "side_brush": 18_000,
-    "main_brush": 18_000,
-    "filter": 18_000,
-    "sensor": 18_000,
-    "mop_pad": 12_000,
-    "mop_pad_alt": 12_000,
+    "side_brush": 180 * 60,         # 180 h
+    "rolling_brush": 180 * 60,      # 180 h
+    "filter_mesh": 60 * 60,         # 60 h
+    "sensor": 360 * 60,             # 360 h
+    "mop": 60 * 60,                 # 60 h
+    "dirty_waterfilter": 360 * 60,  # 360 h
+    "dirty_watertank": 30 * 60,     # 30 h
+    "scrape": 30 * 60,              # 30 h
 }
 
 
@@ -242,12 +242,19 @@ def parse_dps168(b64_value: str) -> list[ConsumableUsage]:
 
         for field_id, name in CONSUMABLE_FIELD_MAP.items():
             consumable_bytes = get_bytes(container, field_id)
-            if consumable_bytes is None or len(consumable_bytes) == 0:
+            if consumable_bytes is None:
+                # Component absent from this update — let the sensor keep its
+                # last known (restored) value rather than reporting a change.
                 continue
 
-            # Each consumable contains field 22 with the usage varint
-            inner = decode_message(consumable_bytes)
-            raw_value = get_varint(inner, 22)
+            if len(consumable_bytes) == 0:
+                # Present but empty == freshly reset in the Eufy app; treat as
+                # zero usage so the sensor reads 100% remaining.
+                raw_value = 0
+            else:
+                # Each consumable contains field 22 with the usage varint.
+                inner = decode_message(consumable_bytes)
+                raw_value = get_varint(inner, 22)
 
             max_val = CONSUMABLE_MAX_VALUES.get(name)
             life_pct = None
