@@ -5,13 +5,13 @@ import asyncio
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_COORDINATOR, CONF_DISCOVERED_DEVICES, DOMAIN
+from .const import CONF_CLOUD_SESSION, CONF_COORDINATOR, CONF_DISCOVERED_DEVICES, DOMAIN
 from .mixins import CoordinatorTuyaDeviceUniqueIDMixin
 from .protobuf_parser import decode_message, get_bytes, strip_length_prefix
 
@@ -70,6 +70,14 @@ async def async_setup_entry(
         entities.append(CleaningModeSelect(coordinator=coordinator))
         entities.append(SuctionLevelSelect(coordinator=coordinator))
         entities.append(MopIntensitySelect(coordinator=coordinator))
+
+    # Room cleaning is only available via the optional cloud session.
+    cloud_session = hass.data[DOMAIN][config_entry.entry_id].get(CONF_CLOUD_SESSION)
+    if cloud_session is not None and discovered_devices:
+        first = next(iter(discovered_devices.values()))
+        entities.append(
+            RoomCleanSelect(coordinator=first[CONF_COORDINATOR], session=cloud_session)
+        )
 
     async_add_entities(entities)
 
@@ -333,3 +341,56 @@ class MopIntensitySelect(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, 
             await self.coordinator.async_request_refresh()
         except Exception as e:
             logger.error("Failed to set mop intensity: %s", e)
+
+
+# ─── Room cleaning (cloud only) ───────────────────────────────────────────────
+
+
+class RoomCleanSelect(CoordinatorTuyaDeviceUniqueIDMixin, SelectEntity):
+    """Select a room to clean, via the optional Eufy cloud session.
+
+    Rooms/map data are not available over the local channel, so this entity is
+    only created when the cloud session is enabled and connected. Picking a room
+    starts cleaning it; the list of rooms is populated from DPS 165 pushed over
+    MQTT and updated live.
+    """
+
+    _attr_name = "Clean Room"
+    _attr_icon = "mdi:floor-plan"
+
+    def __init__(self, coordinator, session):
+        # ``coordinator`` is the local coordinator, used only so the mixin binds
+        # this entity to the same device (device_info + unique_id).
+        self.coordinator = coordinator
+        self._session = session
+        self._last_selected: str | None = None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self._session.set_update_callback(self._on_cloud_update)
+
+    @callback
+    def _on_cloud_update(self) -> None:
+        self.async_write_ha_state()
+
+    @property
+    def available(self) -> bool:
+        return bool(self._session.rooms)
+
+    @property
+    def options(self) -> list[str]:
+        return [r["name"] for r in self._session.rooms]
+
+    @property
+    def current_option(self) -> str | None:
+        # Action-style select: reflect the last room we were asked to clean.
+        return self._last_selected
+
+    async def async_select_option(self, option: str) -> None:
+        for room in self._session.rooms:
+            if room["name"] == option:
+                self._last_selected = option
+                self.async_write_ha_state()
+                await self._session.send_room_clean([room["id"]])
+                return
+        logger.error("Unknown room selected: %s", option)

@@ -13,7 +13,14 @@ from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 
-from .const import CONF_COORDINATOR, CONF_DISCOVERED_DEVICES, DOMAIN, PLATFORMS
+from .const import (
+    CONF_CLOUD_SESSION,
+    CONF_COORDINATOR,
+    CONF_DISCOVERED_DEVICES,
+    CONF_ENABLE_CLOUD,
+    DOMAIN,
+    PLATFORMS,
+)
 from .coordinators import EufyTuyaDataUpdateCoordinator
 from .discovery import discover
 from .eufy_local_id_grabber.clients import EufyHomeSession, TuyaAPISession
@@ -125,6 +132,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         logger.exception("Exception when trying to get initial user info and devices")
         raise
     else:
+        # Optional cloud (AIOT MQTT) session for room cleaning. Set up BEFORE
+        # forwarding platforms so the room-select entity can bind to it. A cloud
+        # failure never breaks local setup.
+        if entry.options.get(CONF_ENABLE_CLOUD):
+            await _async_setup_cloud(hass, entry)
+
         # Forward the setup to each platform - use the correct method
         # Try the newer API first, then fallback to older methods
         try:
@@ -143,7 +156,49 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         _async_register_services(hass)
 
+        # Reload when options change (e.g. the cloud toggle) so the cloud
+        # session is started or stopped to match.
+        entry.async_on_unload(entry.add_update_listener(_async_reload_on_update))
+
         return True
+
+
+async def _async_setup_cloud(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Start the optional Eufy cloud MQTT session (for room cleaning)."""
+    from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+    from .cloud.session import EufyCloudSession, derive_openudid
+
+    domain_data = hass.data[DOMAIN][entry.entry_id]
+    device_id = None
+    for props in domain_data.get(CONF_DISCOVERED_DEVICES, {}).values():
+        coordinator = props.get(CONF_COORDINATOR)
+        if coordinator is not None:
+            device_id = coordinator.tuya_client.device_id
+            break
+    if not device_id:
+        logger.warning("Cloud enabled but no local device to bind to; skipping cloud setup")
+        return
+
+    session = EufyCloudSession(
+        username=entry.data[CONF_EMAIL],
+        password=entry.data[CONF_PASSWORD],
+        openudid=derive_openudid(device_id),
+        websession=async_get_clientsession(hass),
+        preferred_device_id=device_id,
+    )
+    try:
+        await session.connect()
+    except Exception as e:  # noqa: BLE001 - cloud is optional, never break local
+        logger.error("Eufy cloud session failed to start (room cleaning unavailable): %s", e)
+        return
+    domain_data[CONF_CLOUD_SESSION] = session
+    logger.info("Eufy cloud session connected — room cleaning available")
+
+
+async def _async_reload_on_update(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload the config entry when its options change."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 def _async_register_services(hass: HomeAssistant) -> None:
@@ -228,6 +283,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             unload_ok = False
     
     if unload_ok:
+        # Tear down the optional cloud session, if any.
+        session = hass.data.get(DOMAIN, {}).get(entry.entry_id, {}).get(CONF_CLOUD_SESSION)
+        if session is not None:
+            try:
+                await session.disconnect()
+            except Exception as e:  # noqa: BLE001
+                logger.debug("Error disconnecting cloud session: %s", e)
+
         hass.data[DOMAIN].pop(entry.entry_id, None)
         # Remove the integration-wide debug services once the last entry is gone.
         if not hass.data.get(DOMAIN):

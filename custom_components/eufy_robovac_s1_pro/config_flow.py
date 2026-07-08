@@ -19,6 +19,7 @@ EUFY_LOGIN_SCHEMA = vol.Schema({vol.Required("username"): str, vol.Required("pas
 
 CONF_ROOM_NAMES = "room_names"
 CONF_CACHED_ROOMS = "cached_rooms"
+CONF_ENABLE_CLOUD = "enable_cloud"
 
 
 class EufyVacuumConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -106,6 +107,7 @@ class EufyVacuumOptionsFlow(OptionsFlow):
         """Show the room name editing form."""
         rooms = self._get_rooms()
         saved_names: dict[str, str] = dict(self._config_entry.options.get(CONF_ROOM_NAMES, {}))
+        cloud_enabled = bool(self._config_entry.options.get(CONF_ENABLE_CLOUD, False))
 
         if user_input is not None:
             # Save the room names
@@ -120,29 +122,29 @@ class EufyVacuumOptionsFlow(OptionsFlow):
 
             updated_options = dict(self._config_entry.options)
             updated_options[CONF_ROOM_NAMES] = new_names
+            updated_options[CONF_ENABLE_CLOUD] = bool(user_input.get(CONF_ENABLE_CLOUD, False))
+            # Reloads the entry (via the update listener) so the cloud session
+            # is started/stopped to match the new toggle.
             return self.async_create_entry(title="", data=updated_options)
 
-        if not rooms:
-            return self.async_abort(
-                reason="no_rooms",
-                description_placeholders={
-                    "message": "No rooms found. Make sure the vacuum is online and has mapped your home in the Eufy app."
-                },
-            )
-
-        # Build the form with one text field per room
-        schema_dict: dict[Any, Any] = {}
+        # The cloud toggle is always offered (it doesn't depend on rooms being
+        # known yet); room-name fields are added when rooms are available.
+        schema_dict: dict[Any, Any] = {
+            vol.Optional(CONF_ENABLE_CLOUD, default=cloud_enabled): bool
+        }
         for room_id, room_type in sorted(rooms, key=lambda r: r[0]):
             default_name = room_type_to_name(room_type, room_id)
             current_name = saved_names.get(str(room_id), default_name)
-            schema_dict[
-                vol.Required(f"room_{room_id}", default=current_name)
-            ] = str
+            schema_dict[vol.Required(f"room_{room_id}", default=current_name)] = str
 
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(schema_dict),
             description_placeholders={
-                "message": "Set custom names for each room. Leave as default to use auto-detected names."
+                "message": (
+                    "Enable cloud to use room cleaning (logs into Eufy's cloud with "
+                    "your saved credentials; required because rooms aren't available "
+                    "locally). Room-name fields appear once rooms are detected."
+                )
             },
         )
