@@ -1,3 +1,4 @@
+import base64
 import logging
 
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -5,6 +6,23 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from .tuya import Message, TuyaDevice
 
 logger = logging.getLogger(__name__)
+
+# DPS keys involved in room / area cleaning. When any of these change we log
+# the new value at INFO (with a hex decode of the base64 payload) so it can be
+# captured while triggering a single-room clean from the Eufy app — the first
+# step to reverse-engineering the DPS 116 "Area Clean" command format.
+ROOM_CAPTURE_DPS = {"116", "117", "124", "140", "141", "146", "147"}
+
+
+def _decode_for_log(value) -> str | None:
+    """Return a space-separated hex decode of a base64 DPS string, else None."""
+    if isinstance(value, str) and len(value) >= 4:
+        try:
+            decoded = base64.b64decode(value)
+        except Exception:
+            return None
+        return " ".join(f"{b:02x}" for b in decoded)
+    return None
 
 
 class EufyTuyaDataUpdateCoordinator(DataUpdateCoordinator):
@@ -28,6 +46,23 @@ class EufyTuyaDataUpdateCoordinator(DataUpdateCoordinator):
         changed = new_dps != existing_dps
 
         if changed:
+            # Log which keys actually changed. Room/area DPS are logged at INFO
+            # (with hex) for capture; everything else stays at DEBUG.
+            for key, value in new_dps.items():
+                old = existing_dps.get(key)
+                if old == value:
+                    continue
+                if key in ROOM_CAPTURE_DPS:
+                    hex_decoded = _decode_for_log(value)
+                    logger.info(
+                        "Room/area DPS %s changed: %r%s",
+                        key,
+                        value,
+                        f"  (hex: {hex_decoded})" if hex_decoded else "",
+                    )
+                else:
+                    logger.debug("DPS %s changed: %r -> %r", key, old, value)
+
             existing_dps.update(new_dps)
 
             if async_set_updated_data_upon_change:
