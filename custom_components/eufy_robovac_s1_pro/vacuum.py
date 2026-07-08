@@ -16,6 +16,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CONF_COORDINATOR, CONF_DISCOVERED_DEVICES, DOMAIN
+from .errors import get_error_context, get_error_message
 from .protobuf_parser import decode_message, strip_length_prefix, get_varint, get_bytes
 
 logger = logging.getLogger(__name__)
@@ -517,7 +518,15 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
             # Only include essential attributes for end users
             if error_code := self.error_code:
                 attrs["error_code"] = error_code
-            
+                attrs["error_message"] = get_error_message(error_code)
+                # Actionable guidance only while an error is active, so normal
+                # operation keeps the attribute list clean.
+                context = get_error_context(error_code)
+                if context.get("troubleshooting"):
+                    attrs["error_troubleshooting"] = context["troubleshooting"]
+                if context.get("common_causes"):
+                    attrs["error_common_causes"] = context["common_causes"]
+
         return attrs
     
     def _is_running(self) -> bool:

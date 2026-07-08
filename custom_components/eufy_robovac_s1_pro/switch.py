@@ -8,6 +8,11 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import CONF_COORDINATOR, CONF_DISCOVERED_DEVICES, DOMAIN, RobovacDPs
 from .mixins import CoordinatorTuyaDeviceUniqueIDMixin
 
+# The S1 Pro (T2080) exposes Boost IQ on DPS 159 (a boolean), not the generic
+# RoboVac DPS 118 — verified against damacus/robovac's tested T2080 dump. Using
+# 118 meant the switch was never created on this device.
+BOOST_IQ_DPS = "159"
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -26,7 +31,7 @@ async def async_setup_entry(
             devices.append(AutoReturnCleaningSwitch(coordinator=coordinator))
         if coordinator.data and RobovacDPs.ROBOVAC_DO_NOT_DISTURB_DPS_ID_139 in coordinator.data:
             devices.append(DoNotDisturbSwitch(coordinator=coordinator))
-        if coordinator.data and RobovacDPs.ROBOVAC_BOOST_IQ_DPS_ID_118 in coordinator.data:
+        if coordinator.data and BOOST_IQ_DPS in coordinator.data:
             devices.append(BoostIQSwitch(coordinator=coordinator))
 
     if devices:
@@ -104,12 +109,12 @@ class BoostIQSwitch(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, Switc
 
     @property
     def available(self) -> bool:
-        return self.coordinator.data is not None and RobovacDPs.ROBOVAC_BOOST_IQ_DPS_ID_118 in self.coordinator.data
+        return self.coordinator.data is not None and BOOST_IQ_DPS in self.coordinator.data
 
     @property
     def is_on(self) -> bool | None:
         if self.coordinator.data:
-            value = self.coordinator.data.get(RobovacDPs.ROBOVAC_BOOST_IQ_DPS_ID_118)
+            value = self.coordinator.data.get(BOOST_IQ_DPS)
             if isinstance(value, bool):
                 return value
             elif value is not None:
@@ -120,7 +125,7 @@ class BoostIQSwitch(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, Switc
         return None
 
     async def async_turn_on(self, **kwargs) -> None:
-        await self.coordinator.tuya_client.async_set({RobovacDPs.ROBOVAC_BOOST_IQ_DPS_ID_118: True})
+        await self.coordinator.tuya_client.async_set({BOOST_IQ_DPS: True})
 
     async def async_turn_off(self, **kwargs) -> None:
-        await self.coordinator.tuya_client.async_set({RobovacDPs.ROBOVAC_BOOST_IQ_DPS_ID_118: False})
+        await self.coordinator.tuya_client.async_set({BOOST_IQ_DPS: False})

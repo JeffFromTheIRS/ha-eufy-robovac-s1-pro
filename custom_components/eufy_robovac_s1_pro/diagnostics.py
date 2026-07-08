@@ -78,7 +78,7 @@ DPS_LABELS: dict[str, str] = {
     "154": "Cleaning Mode Config (S1 Pro, protobuf)",
     "156": "Auto-Return Cleaning",
     "158": "Fan Speed (S1 Pro display)",
-    "159": "Unknown Boolean",
+    "159": "Boost IQ",
     "161": "Unknown Numeric (100 when docked)",
     "163": "Battery Level (alt)",
     "164": "Room Definitions (protobuf)",
