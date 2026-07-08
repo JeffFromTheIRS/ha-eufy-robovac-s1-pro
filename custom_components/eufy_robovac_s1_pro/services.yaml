@@ -1,0 +1,30 @@
+dump_dps:
+  name: Dump DPS state
+  description: >-
+    Dump every device's current DPS dictionary to the Home Assistant log at
+    INFO level. Useful for inspecting the raw local state of the vacuum.
+
+write_dps:
+  name: Write raw DPS (advanced)
+  description: >-
+    WARNING — advanced/debug tool. Writes a raw value to an arbitrary Tuya DPS
+    on every connected device. Misuse can trigger unintended robot behavior
+    (e.g. starting a clean or overwriting map data). Only use values you
+    understand.
+  fields:
+    dps_id:
+      name: DPS ID
+      description: The Tuya DPS ID to write (e.g. "121", "140", "141").
+      required: true
+      example: "121"
+      selector:
+        text:
+    value:
+      name: Value
+      description: >-
+        The value to write. Strings, booleans, integers, and floats are
+        accepted. Use an empty string ("") to send an empty payload.
+      required: true
+      example: ""
+      selector:
+        text:
