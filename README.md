@@ -1,4 +1,4 @@
-# [Eufy RoboVac S1 Pro - Home Assistant Integration]([https://github.com/tkoba1974/ha-eufy-robovac-s1-pro](https://github.com/JeffFromTheIRS/ha-eufy-robovac-s1-pro])
+# [Eufy RoboVac S1 Pro - Home Assistant Integration](https://github.com/JeffFromTheIRS/ha-eufy-robovac-s1-pro)
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 
