@@ -50,9 +50,26 @@ class EufyCloudSession:
         self.dps: dict[str, Any] = {}
         self.map_id: int | None = None
         self.rooms: list[dict] = []
+        # Diagnostics: how many MQTT messages we've received and what the
+        # account's device list looked like (to debug topic binding).
+        self.msg_count = 0
+        self.device_candidates: list[dict] = []
 
     def set_update_callback(self, callback: Callable[[], None]) -> None:
         self._on_update = callback
+
+    def status(self) -> dict[str, Any]:
+        """Diagnostic snapshot of the cloud link (for the room-select entity)."""
+        return {
+            "cloud_connected": bool(self._client),
+            "bound_device_id": self.device_id,
+            "bound_device_model": self.device_model,
+            "mqtt_messages_received": self.msg_count,
+            "dps_keys_seen": sorted(self.dps.keys()),
+            "room_count": len(self.rooms),
+            "map_id": self.map_id,
+            "device_candidates": self.device_candidates,
+        }
 
     async def connect(self) -> None:
         result = await self._http.login()
@@ -66,7 +83,9 @@ class EufyCloudSession:
         if not device:
             raise RuntimeError("No S1 Pro found in the Eufy cloud device list.")
         self.device_id = device["id"]
-        self.device_model = device["model"] or "T2080"
+        # The S1 Pro is T2080A — NOT T2080 (that's the plain S1). The MQTT topic
+        # uses this verbatim, so default to T2080A when the list omits a code.
+        self.device_model = device["model"] or "T2080A"
         _LOGGER.info("Eufy cloud: binding to %s (%s)", self.device_id, self.device_model)
 
         self._client = EufyCleanClient(
@@ -97,27 +116,35 @@ class EufyCloudSession:
 
         candidates: list[dict] = []
         for d in devices:
+            # The MQTT topic uses the AIOT device_sn, so prefer it over any
+            # generic "id" field.
             did = (
-                d.get("id")
-                or d.get("device_sn")
+                d.get("device_sn")
+                or d.get("id")
                 or d.get("devId")
                 or d.get("deviceId")
             )
-            product = d.get("product")
-            model = product.get("product_code") if isinstance(product, dict) else None
-            model = (
-                model
+            product = d.get("product") if isinstance(d.get("product"), dict) else {}
+            # Keep the raw model code verbatim — do NOT truncate T2080A -> T2080.
+            model = str(
+                product.get("product_code")
                 or d.get("device_model")
                 or d.get("product_code")
                 or d.get("model")
                 or ""
             )
             if did:
-                candidates.append({"id": did, "model": str(model)})
+                candidates.append({"id": did, "model": model})
 
-        # Prefer an S1 Pro model, then a device_id matching the local one, else first.
+        self.device_candidates = [dict(c) for c in candidates]
+
+        # Prefer the S1 Pro (T2080A) exactly, then any T2080* device, then a
+        # device_id matching the local one, else the first.
         for c in candidates:
-            if any(m in c["model"].upper() for m in S1_PRO_MODELS):
+            if "T2080A" in c["model"].upper():
+                return c
+        for c in candidates:
+            if "T2080" in c["model"].upper():
                 return c
         if self._preferred_device_id:
             for c in candidates:
@@ -130,6 +157,7 @@ class EufyCloudSession:
         try:
             import json
 
+            self.msg_count += 1
             outer = json.loads(payload)
             inner = json.loads(outer.get("payload", "{}"))
             data = inner.get("data") or {}

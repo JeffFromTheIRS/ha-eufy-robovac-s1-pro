@@ -375,7 +375,9 @@ class RoomCleanSelect(CoordinatorTuyaDeviceUniqueIDMixin, SelectEntity):
 
     @property
     def available(self) -> bool:
-        return bool(self._session.rooms)
+        # Kept available even with no rooms yet so its diagnostic attributes
+        # (cloud connection state) remain visible while the feed is validated.
+        return True
 
     @property
     def options(self) -> list[str]:
@@ -385,6 +387,12 @@ class RoomCleanSelect(CoordinatorTuyaDeviceUniqueIDMixin, SelectEntity):
     def current_option(self) -> str | None:
         # Action-style select: reflect the last room we were asked to clean.
         return self._last_selected
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        # Diagnostic view of the cloud link — useful while the MQTT room feed
+        # is being validated (is it connected, on which topic, receiving data?).
+        return self._session.status()
 
     async def async_select_option(self, option: str) -> None:
         for room in self._session.rooms:
