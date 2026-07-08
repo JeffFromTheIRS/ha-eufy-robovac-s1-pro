@@ -62,6 +62,8 @@ class EufyCloudSession:
         """Diagnostic snapshot of the cloud link (for the room-select entity)."""
         return {
             "cloud_connected": bool(self._client),
+            "mqtt_is_connected": self._client.is_connected() if self._client else False,
+            "mqtt_last_rc": self._client.last_connect_rc if self._client else None,
             "bound_device_id": self.device_id,
             "bound_device_model": self.device_model,
             "mqtt_messages_received": self.msg_count,

@@ -98,6 +98,10 @@ class EufyCleanClient:
         self._on_biz_message_callback: Callable[[bytes], None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._connected_event = asyncio.Event()
+        self.last_connect_rc: int | None = None  # CONNACK code from _on_connect
+
+    def is_connected(self) -> bool:
+        return bool(self._mqtt_client and self._mqtt_client.is_connected())
 
     def set_on_message(self, callback: Callable[[bytes], None]):
         """Set callback for incoming raw MQTT payloads."""
@@ -223,6 +227,7 @@ class EufyCleanClient:
             self._key_path = None
 
     def _on_connect(self, client, userdata, flags, rc):
+        self.last_connect_rc = rc
         if rc == 0:
             _LOGGER.info("Connected to MQTT Broker!")
             if self._loop:
