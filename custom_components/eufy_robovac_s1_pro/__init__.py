@@ -3,12 +3,15 @@ Quick and dirty module to support Eufy S1 Pro.
 """
 
 import asyncio
+import json
 import logging
 from datetime import timedelta
 
+import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.helpers import config_validation as cv
 
 from .const import CONF_COORDINATOR, CONF_DISCOVERED_DEVICES, DOMAIN, PLATFORMS
 from .coordinators import EufyTuyaDataUpdateCoordinator
@@ -16,6 +19,16 @@ from .discovery import discover
 from .eufy_local_id_grabber.clients import EufyHomeSession, TuyaAPISession
 
 logger = logging.getLogger(__name__)
+
+SERVICE_DUMP_DPS = "dump_dps"
+SERVICE_WRITE_DPS = "write_dps"
+
+WRITE_DPS_SCHEMA = vol.Schema(
+    {
+        vol.Required("dps_id"): vol.All(cv.string, vol.Length(min=1, max=4)),
+        vol.Required("value"): vol.Any(cv.string, cv.boolean, int, float),
+    }
+)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -128,7 +141,69 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     logger.error("Failed to setup platform %s: %s", platform, e)
                     # Continue with other platforms even if one fails
 
+        _async_register_services(hass)
+
         return True
+
+
+def _async_register_services(hass: HomeAssistant) -> None:
+    """Register integration-wide debug services (idempotent across entries)."""
+    if hass.services.has_service(DOMAIN, SERVICE_DUMP_DPS):
+        return
+
+    async def _handle_dump_dps(call: ServiceCall) -> None:
+        """Dump every coordinator's current DPS dict to the HA log at INFO."""
+        entries = hass.data.get(DOMAIN, {})
+        if not entries:
+            logger.info("dump_dps: no Eufy RoboVac S1 Pro entries are loaded")
+            return
+        for entry_id, entry_data in entries.items():
+            for entity_id, info in entry_data.get(CONF_DISCOVERED_DEVICES, {}).items():
+                coordinator = info.get(CONF_COORDINATOR)
+                if coordinator is None:
+                    continue
+                logger.info(
+                    "dump_dps[%s/%s]: %s",
+                    entry_id,
+                    entity_id,
+                    json.dumps(coordinator.data or {}, default=str, ensure_ascii=False),
+                )
+
+    async def _handle_write_dps(call: ServiceCall) -> None:
+        """Write a raw value to a Tuya DPS on every coordinator (advanced/debug)."""
+        dps_id = str(call.data["dps_id"])
+        value = call.data["value"]
+        entries = hass.data.get(DOMAIN, {})
+        if not entries:
+            logger.warning("write_dps: no Eufy RoboVac S1 Pro entries are loaded")
+            return
+        for entry_id, entry_data in entries.items():
+            for entity_id, info in entry_data.get(CONF_DISCOVERED_DEVICES, {}).items():
+                coordinator = info.get(CONF_COORDINATOR)
+                if coordinator is None:
+                    continue
+                logger.info(
+                    "write_dps[%s/%s]: writing DPS %s = %r",
+                    entry_id,
+                    entity_id,
+                    dps_id,
+                    value,
+                )
+                try:
+                    await coordinator.tuya_client.async_set({dps_id: value})
+                except Exception:
+                    logger.exception(
+                        "write_dps[%s/%s]: write failed for DPS %s = %r",
+                        entry_id,
+                        entity_id,
+                        dps_id,
+                        value,
+                    )
+
+    hass.services.async_register(DOMAIN, SERVICE_DUMP_DPS, _handle_dump_dps)
+    hass.services.async_register(
+        DOMAIN, SERVICE_WRITE_DPS, _handle_write_dps, schema=WRITE_DPS_SCHEMA
+    )
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -154,5 +229,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id, None)
-    
+        # Remove the integration-wide debug services once the last entry is gone.
+        if not hass.data.get(DOMAIN):
+            for service in (SERVICE_DUMP_DPS, SERVICE_WRITE_DPS):
+                if hass.services.has_service(DOMAIN, service):
+                    hass.services.async_remove(DOMAIN, service)
+
     return unload_ok
