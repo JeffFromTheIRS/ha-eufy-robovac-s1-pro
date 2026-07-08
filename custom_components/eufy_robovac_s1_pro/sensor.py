@@ -82,6 +82,7 @@ async def async_setup_entry(
             ("140", "Room Config", "mdi:floor-plan"),
             ("116", "Area Clean Command", "mdi:selection-ellipse"),
             ("117", "Area Clean Active", "mdi:play-circle-outline"),
+            ("124", "Area Set", "mdi:selection-drag"),
             ("121", "Map Data", "mdi:map"),
         ]
         for dps_id, name, icon in raw_dps_sensors:
