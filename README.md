@@ -32,7 +32,7 @@ It is designed for **local-only operation**: after the initial setup (which requ
 1. Open HACS
 2. Click on "Integrations"
 3. Click the three dots menu in the top right and select "Custom repositories"
-4. Add repository URL `https://github.com/tkoba1974/ha-eufy-robovac-s1-pro`
+4. Add repository URL `https://github.com/JeffFromTheIRS/ha-eufy-robovac-s1-pro`
 5. Select "Integration" as the category
 6. Click "Add"
 7. Search for "Eufy RoboVac S1 Pro" in HACS and install it
