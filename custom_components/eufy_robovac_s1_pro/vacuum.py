@@ -61,6 +61,52 @@ class RobovacState(Enum):
     UNKNOWN = "unknown"
 
 
+# Exact DPS 153 status values verified on the S1 Pro (T2080), imported from
+# damacus/robovac's model table. These are checked BEFORE the byte-pattern
+# heuristic because several states share near-identical bytes that the
+# heuristic conflates — most importantly "Heading Home" (BBAHQgA=) vs
+# "Standby" (BhAHQgBSAA==), which previously both read as RETURNING.
+DPS153_EXACT: dict[str, tuple[RobovacState, str]] = {
+    # --- Cleaning ---
+    "CAoCCAEQBTIA": (RobovacState.CLEANING, "cleaning"),          # Room Cleaning
+    "CAoCCAEQBVIA": (RobovacState.CLEANING, "cleaning"),          # Room Positioning
+    "DAoCCAEQBTICEAFSAA==": (RobovacState.CLEANING, "cleaning"),  # Room Positioning
+    "BgoAEAUyAA==": (RobovacState.CLEANING, "cleaning"),          # Auto Cleaning
+    "CgoAEAkaAggBMgA=": (RobovacState.CLEANING, "cleaning"),      # Auto Cleaning
+    "CgoAEAUyAhABUgA=": (RobovacState.CLEANING, "cleaning"),      # Auto Cleaning
+    "BhAGGgIIAQ==": (RobovacState.CLEANING, "cleaning"),          # Manual Control
+    # --- Paused ---
+    "CAoAEAUyAggB": (RobovacState.PAUSED, "paused"),              # Paused
+    "CgoCCAEQBTICCAE=": (RobovacState.PAUSED, "paused"),          # Room Paused
+    # --- Returning ---
+    "BBAHQgA=": (RobovacState.RETURNING, "returning"),            # Heading Home
+    "AgoA": (RobovacState.RETURNING, "returning"),                # Heading Home
+    "CgoAEAcyAggBQgA=": (RobovacState.RETURNING, "returning"),    # Temporary Return
+    "DAoCCAEQBzICCAFCAA==": (RobovacState.RETURNING, "returning"),  # Temporary Return
+    # --- Docked / station work (all "at home") ---
+    "BBADGgA=": (RobovacState.DOCKED, "charging"),               # Charging
+    "DAoCCAEQAxoAMgIIAQ==": (RobovacState.DOCKED, "charging"),   # Charge Mid-Clean
+    "BhAHQgBSAA==": (RobovacState.DOCKED, "idle"),               # Standby
+    "AA==": (RobovacState.DOCKED, "idle"),                       # Standby
+    "AhAB": (RobovacState.DOCKED, "idle"),                       # Sleeping
+    "BhADGgIIAQ==": (RobovacState.DOCKED, "idle"),              # Completed
+    "DAoCCAEQCRoCCAEyAA==": (RobovacState.DOCKED, "water_refilling"),   # Adding Water
+    "DgoAEAkaAggBMgA6AhAB": (RobovacState.DOCKED, "water_refilling"),   # Adding Water
+    "DAoAEAUaADICEAFSAA==": (RobovacState.DOCKED, "water_refilling"),   # Adding Water
+    "BhAJOgIQAg==": (RobovacState.DOCKED, "mop_drying"),         # Drying Mop
+    "CBAJGgA6AhAC": (RobovacState.DOCKED, "mop_drying"),         # Drying Mop
+    "ChAJGgIIAToCEAI=": (RobovacState.DOCKED, "mop_drying"),     # Drying Mop
+    "DgoAEAUaAggBMgIQAVIA": (RobovacState.DOCKED, "mop_washing"),  # Washing Mop
+    "EAoCCAEQCRoCCAEyADoCEAE=": (RobovacState.DOCKED, "mop_washing"),  # Washing Mop
+    "BhAJOgIQAQ==": (RobovacState.DOCKED, "mop_washing"),        # Washing Mop
+    "AhAJ": (RobovacState.DOCKED, "mop_operations"),            # Removing Dirty Water
+    "BRAJ+gEA": (RobovacState.DOCKED, "dust_collecting"),       # Emptying Dust
+    "DQoCCAEQCTICCAH6AQA=": (RobovacState.DOCKED, "dust_collecting"),  # Remove Dust Mid-Clean
+    # --- Error ---
+    "CAoAEAIyAggB": (RobovacState.ERROR, "error"),             # Error
+}
+
+
 def decode_dps153_to_state(dps153_value: str) -> tuple[RobovacState, str]:
     """
     dps153の値からロボット掃除機の状態とサブステータスを判定
@@ -80,6 +126,12 @@ def decode_dps153_to_state(dps153_value: str) -> tuple[RobovacState, str]:
     Returns:
         (RobovacState, substatus_str): 判定された状態とサブステータス文字列のタプル
     """
+    # Exact-match fast path against verified S1 Pro values (damacus/robovac).
+    # Runs first so room-cleaning / heading-home / standby are never
+    # misclassified by the byte-pattern heuristic below.
+    if isinstance(dps153_value, str) and dps153_value in DPS153_EXACT:
+        return DPS153_EXACT[dps153_value]
+
     try:
         # Base64文字列の場合はデコード
         if isinstance(dps153_value, str):
@@ -369,18 +421,12 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
             self._substatus = substatus
             
             logger.debug(f"Detected state: {detected_state.value}, substatus: {substatus}")
-            
-            # Battery sanity check: if state says RETURNING but battery
-            # is full, the vacuum has already docked — override to DOCKED.
-            if detected_state == RobovacState.RETURNING:
-                battery = self.coordinator.data.get("8") or self.coordinator.data.get("163", 0)
-                try:
-                    if int(battery) >= 95:
-                        detected_state = RobovacState.DOCKED
-                        substatus = "idle"
-                        logger.debug("Overriding RETURNING → DOCKED (battery %s%%)", battery)
-                except (ValueError, TypeError):
-                    pass
+
+            # NOTE: intentionally NO battery-based override here. The S1 Pro
+            # reaches 100% quickly and holds it while cleaning or returning, so
+            # "battery full" does NOT imply docked. State comes solely from the
+            # decoded DPS 153 status. (This was the cause of the robot showing
+            # "docked" in HA while it was actually out cleaning/returning.)
 
             # 状態に応じたフラグ更新と値の返却
             if detected_state == RobovacState.CLEANING:
@@ -430,19 +476,11 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
             self._was_paused = False
             return VacuumActivity.RETURNING
         elif dps6 == 0 and dps7 == 0:
-            battery = self.coordinator.data.get("8", 0)
-            if battery >= 95:
-                return VacuumActivity.DOCKED
-            else:
-                return VacuumActivity.IDLE
-        
-        # Battery-based DOCKED detection as last resort
-        battery = self.coordinator.data.get("8") or self.coordinator.data.get("163", 0)
-        try:
-            if int(battery) >= 95:
-                return VacuumActivity.DOCKED
-        except (ValueError, TypeError):
-            pass
+            return VacuumActivity.IDLE
+
+        # Unknown, and no status DPS to decode. Report IDLE rather than
+        # guessing DOCKED from battery level — a full battery does not imply
+        # the robot is docked (see the note in the DPS 153 branch above).
         return VacuumActivity.IDLE
 
     @property
